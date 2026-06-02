@@ -18,7 +18,7 @@ VERSION="0.1.0"
 DMG="$ROOT/Build/Clip4X-$VERSION.dmg"
 
 DEV_ID="${DEV_ID:-Developer ID Application: Rachel Larralde (5U92RP4C5J)}"
-NOTARY_PROFILE="${NOTARY_PROFILE:-notarize}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-AC_NOTARY}"
 
 cd "$ROOT"
 swift build -c release

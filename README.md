@@ -65,7 +65,7 @@ Override defaults with env vars:
 | Var              | Default                                                   |
 |------------------|-----------------------------------------------------------|
 | `DEV_ID`         | `Developer ID Application: Rachel Larralde (5U92RP4C5J)`   |
-| `NOTARY_PROFILE` | `notarize` (a stored `xcrun notarytool` keychain profile) |
+| `NOTARY_PROFILE` | `AC_NOTARY` (a stored `xcrun notarytool` keychain profile) |
 | `SKIP_NOTARIZE`  | set to `1` to sign only                                   |
 
 First-time notary setup (once per machine):
