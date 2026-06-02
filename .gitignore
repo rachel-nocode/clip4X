@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+DerivedData/
+Build/
+*.xcuserdata/
+*.swp
+.DS_Store
+Clip4X Exports/
