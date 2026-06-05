@@ -96,6 +96,14 @@ public struct TimedOverlay: Hashable, Sendable {
     }
 }
 
+public enum UploadState: Hashable, Sendable {
+    case idle
+    case uploading(progress: Double)
+    case scheduled(Date)
+    case published
+    case failed(String)
+}
+
 public struct ClipCandidate: Identifiable, Hashable, Sendable {
     public var id: UUID
     public var title: String
@@ -107,6 +115,8 @@ public struct ClipCandidate: Identifiable, Hashable, Sendable {
     public var transcript: [TranscriptSegment]
     public var isSelected: Bool
     public var exportURL: URL?
+    public var youtubeVideoID: String?
+    public var uploadState: UploadState
 
     public init(
         id: UUID = UUID(),
@@ -118,7 +128,9 @@ public struct ClipCandidate: Identifiable, Hashable, Sendable {
         score: Int,
         transcript: [TranscriptSegment],
         isSelected: Bool = true,
-        exportURL: URL? = nil
+        exportURL: URL? = nil,
+        youtubeVideoID: String? = nil,
+        uploadState: UploadState = .idle
     ) {
         self.id = id
         self.title = title
@@ -130,6 +142,13 @@ public struct ClipCandidate: Identifiable, Hashable, Sendable {
         self.transcript = transcript
         self.isSelected = isSelected
         self.exportURL = exportURL
+        self.youtubeVideoID = youtubeVideoID
+        self.uploadState = uploadState
+    }
+
+    public var youtubeURL: URL? {
+        guard let youtubeVideoID else { return nil }
+        return URL(string: "https://youtu.be/\(youtubeVideoID)")
     }
 
     public var duration: Double {

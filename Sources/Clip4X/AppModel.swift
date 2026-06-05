@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
     @Published var log: [String] = []
     @Published var transcriptCount = 0
 
+    let youtubeAuth = YouTubeAuthManager()
+
     private let fileManager = FileManager.default
 
     func chooseVideo() {
@@ -134,24 +136,14 @@ final class AppModel: ObservableObject {
 
                 for clip in selectedClips {
                     status = "Exporting \(clip.title)"
-                    let baseName = safeFileName("\(timecode(clip.start))-\(clip.title)")
-                    let outputURL = exportRoot.appendingPathComponent(baseName).appendingPathExtension("mp4")
-                    let overlayDirectory = tempDirectory.appendingPathComponent(baseName)
-                    let overlays = try overlayRenderer.writeOverlays(
-                        clip: clip,
-                        ratio: selectedRatio,
-                        destinationDirectory: overlayDirectory
+                    let outputURL = try await exportClip(
+                        clip,
+                        sourceURL: sourceURL,
+                        mediaTools: mediaTools,
+                        overlayRenderer: overlayRenderer,
+                        exportRoot: exportRoot,
+                        tempDirectory: tempDirectory
                     )
-
-                    try await mediaTools.exportComposedClip(
-                        videoURL: sourceURL,
-                        clip: clip,
-                        ratio: selectedRatio,
-                        overlays: overlays,
-                        destinationURL: outputURL
-                    )
-
-                    markExported(clipID: clip.id, url: outputURL)
                     appendLog("Exported \(outputURL.path)")
                 }
 
@@ -163,6 +155,148 @@ final class AppModel: ObservableObject {
             }
             isWorking = false
         }
+    }
+
+    /// Exports one clip with FFmpeg, records its URL, and returns it. Reuses the
+    /// already-exported file when present (so upload can skip re-rendering).
+    private func exportClip(
+        _ clip: ClipCandidate,
+        sourceURL: URL,
+        mediaTools: MediaTools,
+        overlayRenderer: CaptionOverlayRenderer,
+        exportRoot: URL,
+        tempDirectory: URL
+    ) async throws -> URL {
+        if let existing = clip.exportURL, fileManager.fileExists(atPath: existing.path) {
+            return existing
+        }
+        let baseName = safeFileName("\(timecode(clip.start))-\(clip.title)")
+        let outputURL = exportRoot.appendingPathComponent(baseName).appendingPathExtension("mp4")
+        let overlays = try overlayRenderer.writeOverlays(
+            clip: clip,
+            ratio: selectedRatio,
+            destinationDirectory: tempDirectory.appendingPathComponent(baseName)
+        )
+        try await mediaTools.exportComposedClip(
+            videoURL: sourceURL,
+            clip: clip,
+            ratio: selectedRatio,
+            overlays: overlays,
+            destinationURL: outputURL
+        )
+        markExported(clipID: clip.id, url: outputURL)
+        return outputURL
+    }
+
+    // MARK: - YouTube
+
+    func connectYouTube() {
+        Task {
+            await youtubeAuth.connect()
+            if let error = youtubeAuth.lastError {
+                appendLog("YouTube: \(error)")
+            } else if youtubeAuth.isConnected {
+                appendLog("Connected to YouTube")
+            }
+        }
+    }
+
+    func disconnectYouTube() {
+        youtubeAuth.disconnect()
+        appendLog("Disconnected from YouTube")
+    }
+
+    /// Exports (if needed) and uploads all selected clips as Shorts.
+    /// When `schedule` is set, the videos publish privately at that time.
+    func uploadSelected(schedule: Date? = nil) {
+        guard let sourceURL else { return }
+        guard youtubeAuth.isConnected else {
+            status = "Connect YouTube first."
+            return
+        }
+        let selectedClips = clips.filter(\.isSelected)
+        guard !selectedClips.isEmpty else {
+            status = "Select at least one clip."
+            return
+        }
+
+        isWorking = true
+        Task {
+            do {
+                guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
+                guard let ffprobe = await ToolLocator.find("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
+                let mediaTools = MediaTools(ffmpegPath: ffmpeg, ffprobePath: ffprobe)
+                let exportRoot = outputDirectory
+                    .appendingPathComponent(sourceURL.deletingPathExtension().lastPathComponent)
+                    .appendingPathComponent(selectedRatio.label)
+                try fileManager.createDirectory(at: exportRoot, withIntermediateDirectories: true)
+                let tempDirectory = try makeWorkDirectory()
+                let overlayRenderer = CaptionOverlayRenderer()
+                let uploader = YouTubeUploader()
+
+                for clip in selectedClips {
+                    status = "Preparing \(clip.title)"
+                    let fileURL = try await exportClip(
+                        clip,
+                        sourceURL: sourceURL,
+                        mediaTools: mediaTools,
+                        overlayRenderer: overlayRenderer,
+                        exportRoot: exportRoot,
+                        tempDirectory: tempDirectory
+                    )
+
+                    let token = try await youtubeAuth.validToken()
+                    status = "Uploading \(clip.title)"
+                    setUploadState(clipID: clip.id, .uploading(progress: 0))
+
+                    let request = uploadRequest(for: clip, schedule: schedule)
+                    let clipID = clip.id
+                    let videoID = try await uploader.upload(
+                        fileURL: fileURL,
+                        request: request,
+                        accessToken: token
+                    ) { fraction in
+                        Task { @MainActor [weak self] in
+                            self?.setUploadState(clipID: clipID, .uploading(progress: fraction))
+                        }
+                    }
+
+                    markUploaded(clipID: clip.id, videoID: videoID, schedule: schedule)
+                    appendLog("Uploaded \(clip.title) → https://youtu.be/\(videoID)")
+                }
+
+                status = schedule == nil
+                    ? "Uploaded \(selectedClips.count) clip\(selectedClips.count == 1 ? "" : "s")"
+                    : "Scheduled \(selectedClips.count) clip\(selectedClips.count == 1 ? "" : "s")"
+            } catch {
+                status = error.localizedDescription
+                appendLog(error.localizedDescription)
+            }
+            isWorking = false
+        }
+    }
+
+    private func uploadRequest(for clip: ClipCandidate, schedule: Date?) -> YouTubeUploadRequest {
+        let title = String(clip.title.prefix(90))
+        let description = "\(clip.reason)\n\n#Shorts"
+        return YouTubeUploadRequest(
+            title: "\(title) #Shorts",
+            description: description,
+            tags: ["Shorts", clip.theme],
+            privacy: schedule == nil ? .public : .private,
+            publishAt: schedule
+        )
+    }
+
+    private func setUploadState(clipID: UUID, _ state: UploadState) {
+        guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        clips[index].uploadState = state
+    }
+
+    private func markUploaded(clipID: UUID, videoID: String, schedule: Date?) {
+        guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        clips[index].youtubeVideoID = videoID
+        clips[index].uploadState = schedule.map(UploadState.scheduled) ?? .published
     }
 
     func toggleSelection(for clip: ClipCandidate) {

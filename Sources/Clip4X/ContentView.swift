@@ -64,6 +64,8 @@ struct ContentView: View {
                 dropZone
                 formatSection
                 actionSection
+                YouTubeSection(auth: model.youtubeAuth)
+                    .environmentObject(model)
                 statusPanel
             }
             .padding(24)
@@ -337,7 +339,18 @@ private struct ClipCard: View {
                 MetadataPill(icon: "timer", text: clip.displayDuration)
                 MetadataPill(icon: "tag", text: clip.theme)
 
+                UploadStatePill(state: clip.uploadState)
+
                 Spacer()
+
+                if let youtubeURL = clip.youtubeURL {
+                    Button {
+                        model.openExport(youtubeURL)
+                    } label: {
+                        Label("YouTube", systemImage: "play.tv")
+                    }
+                    .buttonStyle(OutlineButtonStyle(compact: true))
+                }
 
                 if let exportURL = clip.exportURL {
                     Button {
@@ -521,6 +534,183 @@ private struct ChipButtonStyle: ButtonStyle {
                     .stroke(selected ? MDColor.primary : MDColor.outline, lineWidth: selected ? 1.5 : 1)
             )
             .opacity(configuration.isPressed ? 0.78 : 1)
+    }
+}
+
+private struct YouTubeSection: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var auth: YouTubeAuthManager
+    @State private var showSchedule = false
+    @State private var scheduleDate = Date().addingTimeInterval(3600)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel("YouTube")
+
+            if !auth.isConfigured {
+                notConfigured
+            } else if !auth.isConnected {
+                Button {
+                    model.connectYouTube()
+                } label: {
+                    Label("Connect YouTube", systemImage: "link")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TonalButtonStyle())
+                .disabled(model.isWorking)
+            } else {
+                connected
+            }
+
+            if let error = auth.lastError {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(MDColor.muted)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private var notConfigured: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Set the \(YouTubeConfig.clientIDKey) environment variable to upload Shorts directly.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MDColor.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                openSetupGuide()
+            } label: {
+                Label("Setup guide", systemImage: "book")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(OutlineButtonStyle())
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MDColor.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8).stroke(MDColor.outline, lineWidth: 1)
+        )
+    }
+
+    private var connected: some View {
+        VStack(spacing: 10) {
+            HStack {
+                StatusPill(icon: "checkmark.seal.fill", text: "Connected", color: MDColor.success)
+                Spacer()
+                Button("Disconnect") { model.disconnectYouTube() }
+                    .buttonStyle(OutlineButtonStyle(compact: true))
+            }
+
+            Button {
+                model.uploadSelected()
+            } label: {
+                Label("Upload as Shorts", systemImage: "arrow.up.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(FilledButtonStyle())
+            .disabled(uploadDisabled)
+
+            Button {
+                showSchedule = true
+            } label: {
+                Label("Schedule…", systemImage: "calendar.badge.clock")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TonalButtonStyle())
+            .disabled(uploadDisabled)
+            .popover(isPresented: $showSchedule) {
+                schedulePopover
+            }
+        }
+    }
+
+    private var schedulePopover: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Schedule publish")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(MDColor.onSurface)
+            Text("Uploaded privately, auto-published by YouTube at this time.")
+                .font(.system(size: 12))
+                .foregroundStyle(MDColor.muted)
+
+            DatePicker("", selection: $scheduleDate, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                .datePickerStyle(.compact)
+                .labelsHidden()
+
+            Button {
+                showSchedule = false
+                model.uploadSelected(schedule: scheduleDate)
+            } label: {
+                Label("Schedule upload", systemImage: "checkmark")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(FilledButtonStyle())
+        }
+        .padding(18)
+        .frame(width: 300)
+        .background(MDColor.surface)
+    }
+
+    private var uploadDisabled: Bool {
+        model.isWorking || model.clips.filter(\.isSelected).isEmpty
+    }
+
+    private func openSetupGuide() {
+        // Prefer a copy bundled with the packaged app; when running unbundled
+        // (swift run), fall back to the file in the working directory; finally
+        // the GitHub-hosted guide.
+        if let bundled = Bundle.main.url(forResource: "youtube-setup", withExtension: "html") {
+            NSWorkspace.shared.open(bundled)
+            return
+        }
+        let local = URL(fileURLWithPath: "youtube-setup.html")
+        if FileManager.default.fileExists(atPath: local.path) {
+            NSWorkspace.shared.open(local)
+            return
+        }
+        if let remote = URL(string: "https://github.com/rachel-nocode/clip4X/blob/main/youtube-setup.html") {
+            NSWorkspace.shared.open(remote)
+        }
+    }
+}
+
+private struct UploadStatePill: View {
+    var state: UploadState
+
+    var body: some View {
+        switch state {
+        case .idle:
+            EmptyView()
+        case let .uploading(progress):
+            pill(icon: "arrow.up.circle", text: "\(Int(progress * 100))%", color: MDColor.primary)
+        case let .scheduled(date):
+            pill(icon: "calendar.badge.clock", text: shortDate(date), color: MDColor.primary)
+        case .published:
+            pill(icon: "checkmark.circle.fill", text: "Published", color: MDColor.success)
+        case let .failed(message):
+            pill(icon: "exclamationmark.triangle.fill", text: message, color: Color(hex: 0xF28B82))
+        }
+    }
+
+    private func pill(icon: String, text: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 11, weight: .semibold))
+            Text(text).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(color.opacity(0.12))
+        .clipShape(Capsule())
+    }
+
+    private func shortDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M/d h:mma"
+        return formatter.string(from: date)
     }
 }
 

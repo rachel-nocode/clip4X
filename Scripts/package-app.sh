@@ -14,6 +14,7 @@ APP_DIR="$ROOT/Build/Clip4X.app"
 STAGING="$ROOT/Build/dmg-staging"
 BINARY="$ROOT/.build/release/Clip4X"
 ICON="$ROOT/Assets/AppIcon/Clip4X.icns"
+ENTITLEMENTS="$ROOT/Clip4X.entitlements"
 VERSION="0.1.0"
 DMG="$ROOT/Build/Clip4X-$VERSION.dmg"
 
@@ -29,6 +30,9 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/Clip4X"
 if [[ -f "$ICON" ]]; then
   cp "$ICON" "$APP_DIR/Contents/Resources/Clip4X.icns"
+fi
+if [[ -f "$ROOT/youtube-setup.html" ]]; then
+  cp "$ROOT/youtube-setup.html" "$APP_DIR/Contents/Resources/youtube-setup.html"
 fi
 
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
@@ -62,8 +66,10 @@ PLIST
 
 # --- code sign with hardened runtime (required for notarization) ---
 codesign --force --options runtime --timestamp \
+  --entitlements "$ENTITLEMENTS" \
   --sign "$DEV_ID" "$APP_DIR/Contents/MacOS/Clip4X"
 codesign --force --options runtime --timestamp \
+  --entitlements "$ENTITLEMENTS" \
   --sign "$DEV_ID" "$APP_DIR"
 codesign --verify --strict --verbose=2 "$APP_DIR"
 
