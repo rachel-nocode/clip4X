@@ -1,9 +1,11 @@
 import AppKit
+import AVKit
 import Clip4XCore
 import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var previewClip: ClipCandidate?
 
     var body: some View {
         ZStack {
@@ -11,6 +13,10 @@ struct ContentView: View {
 
             VStack(spacing: 0) {
                 appBar
+
+                if model.isWorking {
+                    WorkProgressBar(value: model.progress)
+                }
 
                 HStack(spacing: 0) {
                     workflowPanel
@@ -25,6 +31,10 @@ struct ContentView: View {
             }
         }
         .tint(MDColor.primary)
+        .sheet(item: $previewClip) { clip in
+            ClipPreviewSheet(clip: clip)
+                .environmentObject(model)
+        }
     }
 
     private var appBar: some View {
@@ -237,7 +247,7 @@ struct ContentView: View {
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(model.clips) { clip in
-                            ClipCard(clip: clip)
+                            ClipCard(clip: clip, onPreview: { previewClip = $0 })
                                 .environmentObject(model)
                         }
                     }
@@ -299,6 +309,7 @@ struct ContentView: View {
 private struct ClipCard: View {
     @EnvironmentObject private var model: AppModel
     var clip: ClipCandidate
+    var onPreview: (ClipCandidate) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -342,6 +353,13 @@ private struct ClipCard: View {
                 UploadStatePill(state: clip.uploadState)
 
                 Spacer()
+
+                Button {
+                    onPreview(clip)
+                } label: {
+                    Label("Preview", systemImage: "play.circle")
+                }
+                .buttonStyle(OutlineButtonStyle(compact: true))
 
                 if let youtubeURL = clip.youtubeURL {
                     Button {
@@ -711,6 +729,98 @@ private struct UploadStatePill: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "M/d h:mma"
         return formatter.string(from: date)
+    }
+}
+
+private struct WorkProgressBar: View {
+    /// `nil` renders an indeterminate (animated) bar.
+    var value: Double?
+
+    var body: some View {
+        Group {
+            if let value {
+                ProgressView(value: min(max(value, 0), 1))
+            } else {
+                ProgressView()
+            }
+        }
+        .progressViewStyle(.linear)
+        .tint(MDColor.primary)
+        .frame(height: 2)
+        .background(MDColor.surface)
+    }
+}
+
+/// AppKit AVPlayerView wrapper. Avoids AVKit's SwiftUI `VideoPlayer`, whose
+/// generic metadata fails to initialize in an unbundled SwiftPM executable.
+private struct PlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .inline
+        view.videoGravity = .resizeAspect
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        nsView.player = player
+    }
+}
+
+private struct ClipPreviewSheet: View {
+    @EnvironmentObject private var model: AppModel
+    let clip: ClipCandidate
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+    @State private var rendering = true
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(clip.title)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(MDColor.onSurface)
+                        .lineLimit(1)
+                    Text("\(DurationFormatter.short(clip.start)) – \(DurationFormatter.short(clip.end)) · \(clip.displayDuration) · \(model.selectedRatio.label)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(MDColor.muted)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(OutlineButtonStyle(compact: true))
+            }
+            .padding(16)
+
+            if let player {
+                PlayerView(player: player)
+                    .frame(minWidth: 360, minHeight: 480)
+            } else {
+                VStack(spacing: 14) {
+                    ProgressView()
+                    Text(rendering ? "Rendering preview with captions…" : "Preview unavailable")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(MDColor.muted)
+                }
+                .frame(maxWidth: .infinity, minHeight: 480)
+            }
+        }
+        .frame(width: 440, height: 640)
+        .background(MDColor.canvas)
+        .task { await load() }
+        .onDisappear { player?.pause(); player = nil }
+    }
+
+    private func load() async {
+        rendering = true
+        let url = await model.composedPreviewURL(for: clip)
+        rendering = false
+        guard let url else { return }
+        let player = AVPlayer(url: url)
+        self.player = player
+        player.play()
     }
 }
 

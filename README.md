@@ -40,9 +40,11 @@ variable, then click **Connect**.
 
    ```sh
    export CLIP4X_YT_CLIENT_ID="xxxx.apps.googleusercontent.com"
-   # optional, only if your client has one:
-   export CLIP4X_YT_CLIENT_SECRET="..."
+   export CLIP4X_YT_CLIENT_SECRET="GOCSPX-..."
    ```
+
+   > Google Desktop OAuth clients issue **both** a Client ID and a Client secret,
+   > and Google's token endpoint requires the secret — set both.
 
 3. In the app: **Connect YouTube** → authorize in the browser → **Upload as Shorts**
    or **Schedule…**.

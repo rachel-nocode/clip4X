@@ -107,8 +107,13 @@
       <div class="step-title">Tell Clip4X your Client ID</div>
       Set the environment variable before launching the app:
       <pre>export CLIP4X_YT_CLIENT_ID="xxxx.apps.googleusercontent.com"
-# only if your client also shows a secret:
-export CLIP4X_YT_CLIENT_SECRET="..."</pre>
+export CLIP4X_YT_CLIENT_SECRET="GOCSPX-..."</pre>
+      <div class="callout warn" style="margin-top:12px">
+        <strong>Both are required.</strong> Google Desktop OAuth clients always issue a
+        <em>Client secret</em> (<code>GOCSPX-…</code>), and Google's token endpoint rejects
+        the sign-in without it — even though, for installed apps, the secret isn't truly
+        confidential. Copy it from the same credentials page as the Client ID.
+      </div>
       <span class="muted">Add the <code>export</code> line to <code>~/.zshrc</code> to make it permanent.</span>
     </li>
     <li>

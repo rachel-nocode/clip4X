@@ -60,14 +60,16 @@ final class YouTubeAuthManager: ObservableObject {
         )
 
         do {
-            let box = try await withCheckedThrowingContinuation { continuation in
-                handler.currentAuthorizationFlow = OIDAuthState.authState(byPresenting: request, presenting: window) { state, error in
-                    if let state {
-                        continuation.resume(returning: SendableBox(state))
-                    } else {
-                        continuation.resume(throwing: error ?? YouTubeAuthError.cancelled)
-                    }
-                }
+            let box: SendableBox<OIDAuthState> = try await withCheckedThrowingContinuation { continuation in
+                // AppAuth invokes this callback on a background thread. Route it
+                // through a nonisolated factory so it does NOT inherit this
+                // method's @MainActor isolation (which would trip the Swift
+                // concurrency executor assertion and crash).
+                handler.currentAuthorizationFlow = OIDAuthState.authState(
+                    byPresenting: request,
+                    presenting: window,
+                    callback: Self.authCallback(continuation)
+                )
             }
             authState = box.value
             saveToKeychain(box.value)
@@ -82,19 +84,39 @@ final class YouTubeAuthManager: ObservableObject {
         Self.deleteFromKeychain()
     }
 
+    /// Builds the AppAuth completion callback in a nonisolated context so it can
+    /// safely run on whatever thread AppAuth chooses.
+    private nonisolated static func authCallback(
+        _ continuation: CheckedContinuation<SendableBox<OIDAuthState>, Error>
+    ) -> (OIDAuthState?, Error?) -> Void {
+        return { state, error in
+            if let state {
+                continuation.resume(returning: SendableBox(state))
+            } else {
+                continuation.resume(throwing: error ?? YouTubeAuthError.cancelled)
+            }
+        }
+    }
+
+    private nonisolated static func tokenCallback(
+        _ continuation: CheckedContinuation<String, Error>
+    ) -> (String?, String?, Error?) -> Void {
+        return { accessToken, _, error in
+            if let accessToken {
+                continuation.resume(returning: accessToken)
+            } else {
+                continuation.resume(throwing: error ?? YouTubeAuthError.notConnected)
+            }
+        }
+    }
+
     // MARK: - Token access
 
     /// Returns a fresh access token, refreshing transparently if needed.
     func validToken() async throws -> String {
         guard let authState else { throw YouTubeAuthError.notConnected }
         let token: String = try await withCheckedThrowingContinuation { continuation in
-            authState.performAction { accessToken, _, error in
-                if let accessToken {
-                    continuation.resume(returning: accessToken)
-                } else {
-                    continuation.resume(throwing: error ?? YouTubeAuthError.notConnected)
-                }
-            }
+            authState.performAction(freshTokens: Self.tokenCallback(continuation))
         }
         // performAction may have refreshed tokens — persist the latest state.
         saveToKeychain(authState)

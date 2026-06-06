@@ -12,6 +12,8 @@ final class AppModel: ObservableObject {
     @Published var selectedRatio: ExportRatio = .vertical
     @Published var clips: [ClipCandidate] = []
     @Published var isWorking = false
+    /// 0...1 progress for batch work (export/upload). `nil` = indeterminate.
+    @Published var progress: Double?
     @Published var status = "Drop a video to start."
     @Published var log: [String] = []
     @Published var transcriptCount = 0
@@ -51,6 +53,7 @@ final class AppModel: ObservableObject {
     func analyze() {
         guard let sourceURL else { return }
         isWorking = true
+        progress = nil
         clips = []
         transcriptCount = 0
 
@@ -121,6 +124,7 @@ final class AppModel: ObservableObject {
         }
 
         isWorking = true
+        progress = 0
         Task {
             do {
                 guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
@@ -134,8 +138,8 @@ final class AppModel: ObservableObject {
                 let tempDirectory = try makeWorkDirectory()
                 let overlayRenderer = CaptionOverlayRenderer()
 
-                for clip in selectedClips {
-                    status = "Exporting \(clip.title)"
+                for (index, clip) in selectedClips.enumerated() {
+                    status = "Exporting \(clip.title) (\(index + 1) of \(selectedClips.count))"
                     let outputURL = try await exportClip(
                         clip,
                         sourceURL: sourceURL,
@@ -144,6 +148,7 @@ final class AppModel: ObservableObject {
                         exportRoot: exportRoot,
                         tempDirectory: tempDirectory
                     )
+                    progress = Double(index + 1) / Double(selectedClips.count)
                     appendLog("Exported \(outputURL.path)")
                 }
 
@@ -154,6 +159,7 @@ final class AppModel: ObservableObject {
                 appendLog(error.localizedDescription)
             }
             isWorking = false
+            progress = nil
         }
     }
 
@@ -186,6 +192,48 @@ final class AppModel: ObservableObject {
         )
         markExported(clipID: clip.id, url: outputURL)
         return outputURL
+    }
+
+    /// Returns a fully-composed clip (blur-fill, hook title, captions) for
+    /// preview. Reuses the exported file if present, otherwise renders into a
+    /// cached temp folder. The filename encodes the ratio so switching format
+    /// re-renders rather than serving a stale preview.
+    func composedPreviewURL(for clip: ClipCandidate) async -> URL? {
+        guard let sourceURL else { return nil }
+        if let existing = clip.exportURL, fileManager.fileExists(atPath: existing.path) {
+            return existing
+        }
+        do {
+            guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
+            guard let ffprobe = await ToolLocator.find("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
+            let mediaTools = MediaTools(ffmpegPath: ffmpeg, ffprobePath: ffprobe)
+            let previewDir = fileManager.temporaryDirectory.appendingPathComponent("clip4x-preview")
+            try fileManager.createDirectory(at: previewDir, withIntermediateDirectories: true)
+
+            let baseName = safeFileName("\(timecode(clip.start))-\(clip.title)-\(selectedRatio.label)")
+            let outputURL = previewDir.appendingPathComponent(baseName).appendingPathExtension("mp4")
+            if fileManager.fileExists(atPath: outputURL.path) {
+                return outputURL
+            }
+
+            let overlayRenderer = CaptionOverlayRenderer()
+            let overlays = try overlayRenderer.writeOverlays(
+                clip: clip,
+                ratio: selectedRatio,
+                destinationDirectory: previewDir.appendingPathComponent(baseName + "-overlays")
+            )
+            try await mediaTools.exportComposedClip(
+                videoURL: sourceURL,
+                clip: clip,
+                ratio: selectedRatio,
+                overlays: overlays,
+                destinationURL: outputURL
+            )
+            return outputURL
+        } catch {
+            appendLog("Preview render failed: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     // MARK: - YouTube
@@ -221,6 +269,7 @@ final class AppModel: ObservableObject {
         }
 
         isWorking = true
+        progress = 0
         Task {
             do {
                 guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
@@ -233,9 +282,10 @@ final class AppModel: ObservableObject {
                 let tempDirectory = try makeWorkDirectory()
                 let overlayRenderer = CaptionOverlayRenderer()
                 let uploader = YouTubeUploader()
+                let total = Double(selectedClips.count)
 
-                for clip in selectedClips {
-                    status = "Preparing \(clip.title)"
+                for (index, clip) in selectedClips.enumerated() {
+                    status = "Preparing \(clip.title) (\(index + 1) of \(selectedClips.count))"
                     let fileURL = try await exportClip(
                         clip,
                         sourceURL: sourceURL,
@@ -246,7 +296,7 @@ final class AppModel: ObservableObject {
                     )
 
                     let token = try await youtubeAuth.validToken()
-                    status = "Uploading \(clip.title)"
+                    status = "Uploading \(clip.title) (\(index + 1) of \(selectedClips.count))"
                     setUploadState(clipID: clip.id, .uploading(progress: 0))
 
                     let request = uploadRequest(for: clip, schedule: schedule)
@@ -258,10 +308,12 @@ final class AppModel: ObservableObject {
                     ) { fraction in
                         Task { @MainActor [weak self] in
                             self?.setUploadState(clipID: clipID, .uploading(progress: fraction))
+                            self?.progress = (Double(index) + fraction) / total
                         }
                     }
 
                     markUploaded(clipID: clip.id, videoID: videoID, schedule: schedule)
+                    progress = Double(index + 1) / total
                     appendLog("Uploaded \(clip.title) → https://youtu.be/\(videoID)")
                 }
 
@@ -273,6 +325,7 @@ final class AppModel: ObservableObject {
                 appendLog(error.localizedDescription)
             }
             isWorking = false
+            progress = nil
         }
     }
 
