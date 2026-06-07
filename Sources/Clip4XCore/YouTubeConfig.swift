@@ -46,4 +46,48 @@ public struct YouTubeConfig: Sendable {
         let secret = environment[clientSecretKey]?.trimmingCharacters(in: .whitespacesAndNewlines)
         return YouTubeConfig(clientID: clientID, clientSecret: secret?.isEmpty == true ? nil : secret)
     }
+
+    /// Builds config from credentials saved in-app (UserDefaults), falling back
+    /// to the environment. UserDefaults wins because GUI apps launched from
+    /// Finder/Dock do NOT inherit shell environment variables — so a Client ID
+    /// exported in `.zshrc` only reaches the app when launched from a terminal.
+    public static func load(
+        defaults: UserDefaults = .standard,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> YouTubeConfig? {
+        func cleaned(_ value: String?) -> String? {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (trimmed?.isEmpty == false) ? trimmed : nil
+        }
+        guard let clientID = cleaned(defaults.string(forKey: clientIDKey))
+            ?? cleaned(environment[clientIDKey]) else {
+            return nil
+        }
+        let secret = cleaned(defaults.string(forKey: clientSecretKey))
+            ?? cleaned(environment[clientSecretKey])
+        return YouTubeConfig(clientID: clientID, clientSecret: secret)
+    }
+
+    /// Persists in-app entered credentials so subsequent GUI launches (which
+    /// lack shell environment) pick them up. Pass an empty/`nil` Client ID to
+    /// clear the stored credentials.
+    public static func save(
+        clientID: String,
+        clientSecret: String?,
+        to defaults: UserDefaults = .standard
+    ) {
+        let id = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if id.isEmpty {
+            defaults.removeObject(forKey: clientIDKey)
+            defaults.removeObject(forKey: clientSecretKey)
+            return
+        }
+        defaults.set(id, forKey: clientIDKey)
+        let secret = clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let secret, !secret.isEmpty {
+            defaults.set(secret, forKey: clientSecretKey)
+        } else {
+            defaults.removeObject(forKey: clientSecretKey)
+        }
+    }
 }

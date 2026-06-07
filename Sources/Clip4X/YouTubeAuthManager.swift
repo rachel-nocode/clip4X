@@ -12,8 +12,8 @@ final class YouTubeAuthManager: ObservableObject {
     @Published private(set) var isConnected = false
     @Published private(set) var lastError: String?
 
-    /// `nil` when the user has not set `CLIP4X_YT_CLIENT_ID`.
-    let config: YouTubeConfig?
+    /// `nil` when no Client ID is saved in-app or set in `CLIP4X_YT_CLIENT_ID`.
+    @Published private(set) var config: YouTubeConfig?
     var isConfigured: Bool { config != nil }
 
     private var authState: OIDAuthState? {
@@ -22,10 +22,27 @@ final class YouTubeAuthManager: ObservableObject {
     /// Retained so AppAuth's loopback HTTP listener survives the async flow.
     private var redirectHandler: OIDRedirectHTTPHandler?
 
-    init(config: YouTubeConfig? = YouTubeConfig.fromEnvironment()) {
+    init(config: YouTubeConfig? = YouTubeConfig.load()) {
         self.config = config
         self.authState = Self.loadFromKeychain()
         self.isConnected = authState?.isAuthorized ?? false
+    }
+
+    // MARK: - Configuration
+
+    /// Re-reads saved credentials + environment. Used by the "re-check" button
+    /// after the user finishes setup (or launches from a terminal that has the
+    /// env var exported).
+    func reloadConfig() {
+        config = YouTubeConfig.load()
+        if config != nil { lastError = nil }
+    }
+
+    /// Persists Client ID (+ optional secret) entered in-app, then reloads so
+    /// GUI launches without shell environment can connect.
+    func saveCredentials(clientID: String, clientSecret: String?) {
+        YouTubeConfig.save(clientID: clientID, clientSecret: clientSecret)
+        reloadConfig()
     }
 
     // MARK: - Connect / disconnect

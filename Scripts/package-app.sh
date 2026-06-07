@@ -15,7 +15,7 @@ STAGING="$ROOT/Build/dmg-staging"
 BINARY="$ROOT/.build/release/Clip4X"
 ICON="$ROOT/Assets/AppIcon/Clip4X.icns"
 ENTITLEMENTS="$ROOT/Clip4X.entitlements"
-VERSION="0.1.0"
+VERSION="0.1.1"
 DMG="$ROOT/Build/Clip4X-$VERSION.dmg"
 
 DEV_ID="${DEV_ID:-Developer ID Application: Rachel Larralde (5U92RP4C5J)}"
@@ -53,9 +53,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIconFile</key>
     <string>Clip4X</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>0.1.1</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

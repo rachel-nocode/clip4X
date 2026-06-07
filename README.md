@@ -123,4 +123,4 @@ Assets/AppIcon/    App icon (.icns + iconset)
 
 ## License
 
-Private. © Rachel Larralde.
+MIT License. © 2026 Rachel Larralde. See [LICENSE](LICENSE).

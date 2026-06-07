@@ -560,10 +560,24 @@ private struct YouTubeSection: View {
     @ObservedObject var auth: YouTubeAuthManager
     @State private var showSchedule = false
     @State private var scheduleDate = Date().addingTimeInterval(3600)
+    @State private var clientIDInput = ""
+    @State private var clientSecretInput = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionLabel("YouTube")
+            HStack(spacing: 6) {
+                SectionLabel("YouTube")
+                Spacer()
+                Button {
+                    auth.reloadConfig()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(MDColor.muted)
+                .help("Re-check YouTube setup")
+            }
 
             if !auth.isConfigured {
                 notConfigured
@@ -591,18 +605,38 @@ private struct YouTubeSection: View {
 
     private var notConfigured: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Set the \(YouTubeConfig.clientIDKey) environment variable to upload Shorts directly.")
+            Text("Paste your Google OAuth Client ID to upload Shorts directly. One-time setup — see the guide.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(MDColor.muted)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Button {
-                openSetupGuide()
-            } label: {
-                Label("Setup guide", systemImage: "book")
-                    .frame(maxWidth: .infinity)
+            TextField("Client ID", text: $clientIDInput)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+            TextField("Client Secret (optional)", text: $clientSecretInput)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+
+            HStack(spacing: 8) {
+                Button {
+                    auth.saveCredentials(
+                        clientID: clientIDInput,
+                        clientSecret: clientSecretInput.isEmpty ? nil : clientSecretInput
+                    )
+                } label: {
+                    Label("Save & Check", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TonalButtonStyle())
+                .disabled(clientIDInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Button {
+                    openSetupGuide()
+                } label: {
+                    Label("Guide", systemImage: "book")
+                }
+                .buttonStyle(OutlineButtonStyle())
             }
-            .buttonStyle(OutlineButtonStyle())
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
