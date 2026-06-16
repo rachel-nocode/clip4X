@@ -79,45 +79,12 @@ brew install ffmpeg openai-whisper
 swift run Clip4X
 ```
 
-## Build a signed app + DMG
-
-The packaging script builds a release binary, assembles `Clip4X.app`, code-signs it with a
-Developer ID identity and hardened runtime, builds a DMG, notarizes it, and staples the ticket.
-
-```sh
-./Scripts/package-app.sh
-```
-
-Outputs:
-
-- `Build/Clip4X.app` — signed application bundle
-- `Build/Clip4X-0.1.0.dmg` — signed + notarized disk image
-
-Override defaults with env vars:
-
-| Var              | Default                                                   |
-|------------------|-----------------------------------------------------------|
-| `DEV_ID`         | `Developer ID Application: Rachel Larralde (5U92RP4C5J)`   |
-| `NOTARY_PROFILE` | `AC_NOTARY` (a stored `xcrun notarytool` keychain profile) |
-| `SKIP_NOTARIZE`  | set to `1` to sign only                                   |
-
-First-time notary setup (once per machine):
-
-```sh
-xcrun notarytool store-credentials notarize \
-  --apple-id "you@example.com" \
-  --team-id 5U92RP4C5J \
-  --password "app-specific-password"
-```
-
 ## Project layout
 
 ```
 Sources/
   Clip4X/          SwiftUI app (UI, AppModel)
   Clip4XCore/      Pipeline: transcription, ranking, FFmpeg, captions
-Scripts/
-  package-app.sh   Build + sign + notarize + DMG
 Assets/AppIcon/    App icon (.icns + iconset)
 ```
 
