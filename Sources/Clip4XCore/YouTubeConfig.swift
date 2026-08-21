@@ -1,6 +1,6 @@
 import Foundation
 
-/// OAuth + endpoint configuration for YouTube upload.
+/// OAuth + endpoint configuration for YouTube upload and own-video import.
 ///
 /// Clip4X is open source, so it ships no baked-in Google credentials. Each user
 /// creates their own Google Cloud "Desktop app" OAuth client (one-time setup,
@@ -17,15 +17,19 @@ public struct YouTubeConfig: Sendable {
     public let clientID: String
     public let clientSecret: String?
 
-    /// Narrowest scope that allows uploads. Avoids triggering the heavier
-    /// restricted-scope / security-assessment review path.
+    /// Upload Shorts. Kept as the narrowest write scope.
     public static let scope = "https://www.googleapis.com/auth/youtube.upload"
+    /// Read the connected channel and video metadata so import can verify ownership.
+    public static let readonlyScope = "https://www.googleapis.com/auth/youtube.readonly"
+    public static let scopes = [scope, readonlyScope]
 
     public static let authorizationEndpoint = URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!
     public static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
     public static let resumableUploadEndpoint = URL(
         string: "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
     )!
+    public static let channelsEndpoint = URL(string: "https://www.googleapis.com/youtube/v3/channels")!
+    public static let videosListEndpoint = URL(string: "https://www.googleapis.com/youtube/v3/videos")!
 
     /// Keychain service identifier for the persisted auth state.
     public static let keychainService = "audio.witch.clip4x.youtube"

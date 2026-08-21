@@ -21,6 +21,16 @@ final class AppModel: ObservableObject {
     let youtubeAuth = YouTubeAuthManager()
 
     private let fileManager = FileManager.default
+    private var cancellables = Set<AnyCancellable>()
+
+    init() {
+        youtubeAuth.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+    }
 
     func chooseVideo() {
         let panel = NSOpenPanel()
@@ -51,7 +61,7 @@ final class AppModel: ObservableObject {
     }
 
     func analyze() {
-        guard let sourceURL else { return }
+        guard sourceURL != nil, !isWorking else { return }
         isWorking = true
         progress = nil
         clips = []
@@ -59,60 +69,114 @@ final class AppModel: ObservableObject {
 
         Task {
             do {
-                appendLog("Checking local tools")
-                guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
-                guard let ffprobe = await ToolLocator.find("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
-                guard let whisper = await ToolLocator.find("whisper") else { throw Clip4XError.missingTool("whisper") }
-
-                let mediaTools = MediaTools(ffmpegPath: ffmpeg, ffprobePath: ffprobe)
-                let workDirectory = try makeWorkDirectory()
-                let audioURL = workDirectory.appendingPathComponent("source.wav")
-                let transcriptDirectory = workDirectory.appendingPathComponent("transcript")
-
-                status = "Reading video"
-                let duration = try await mediaTools.probeDuration(videoURL: sourceURL)
-
-                status = "Extracting audio"
-                try await mediaTools.extractAudio(videoURL: sourceURL, destinationURL: audioURL)
-
-                status = "Transcribing with Whisper"
-                let transcriber = WhisperTranscriber(whisperPath: whisper, model: "base")
-                let segments = try await transcriber.transcribe(audioURL: audioURL, outputDirectory: transcriptDirectory)
-                transcriptCount = segments.count
-
-                status = "Finding clip moments"
-                let detector = ClipMomentDetector()
-                let fallbackClips = detector.detect(in: segments, sourceDuration: duration)
-
-                if let codex = await ToolLocator.find("codex") {
-                    do {
-                        status = "Ranking moments with Codex CLI"
-                        let ranker = CodexMomentRanker(codexPath: codex)
-                        let codexClips = try await ranker.rank(
-                            segments: segments,
-                            sourceDuration: duration,
-                            workDirectory: workDirectory.appendingPathComponent("codex")
-                        )
-                        clips = codexClips.isEmpty ? fallbackClips : codexClips
-                        appendLog("Codex-ranked clips: \(clips.count)")
-                    } catch {
-                        clips = fallbackClips
-                        appendLog("Codex ranking failed; used local heuristic: \(error.localizedDescription)")
-                    }
-                } else {
-                    clips = fallbackClips
-                    appendLog("Codex CLI missing; used local heuristic")
-                }
-
-                status = clips.isEmpty ? "No clips found" : "Found \(clips.count) clip candidates"
-                appendLog("Transcript segments: \(segments.count)")
-                appendLog("Clip candidates: \(clips.count)")
+                try await runAnalysis()
             } catch {
                 status = error.localizedDescription
                 appendLog(error.localizedDescription)
             }
             isWorking = false
         }
+    }
+
+    /// Paste a YouTube URL, verify it belongs to the connected channel, download,
+    /// then run Find Clips.
+    func importYouTubeVideo(_ urlString: String) {
+        guard !isWorking else { return }
+        guard youtubeAuth.isConnected else {
+            status = "Connect YouTube first."
+            return
+        }
+        guard youtubeAuth.canImportOwnVideos else {
+            status = YouTubeImportError.reconnectRequired.localizedDescription ?? "Reconnect YouTube."
+            youtubeAuth.markError("Reconnect YouTube — import needs an extra permission.")
+            return
+        }
+
+        isWorking = true
+        progress = nil
+        Task {
+            do {
+                guard let videoID = YouTubeVideoID.parse(urlString) else {
+                    throw YouTubeImportError.invalidURL
+                }
+
+                status = "Checking ownership…"
+                appendLog("Checking ownership for \(videoID)")
+                let token = try await youtubeAuth.validToken()
+                let video = try await YouTubeLibrary().verifyOwnership(videoID: videoID, accessToken: token)
+
+                guard let ytdlp = await ToolLocator.find("yt-dlp") else {
+                    throw Clip4XError.missingTool("yt-dlp")
+                }
+                status = "Downloading \(video.title)…"
+                appendLog("Downloading \(video.title)")
+                let fileURL = try await YouTubeDownloader().download(videoID: videoID, ytDlpPath: ytdlp)
+
+                loadVideo(fileURL)
+                appendLog("Imported YouTube video \(videoID)")
+                try await runAnalysis()
+            } catch {
+                status = error.localizedDescription
+                appendLog(error.localizedDescription)
+                if case YouTubeImportError.reconnectRequired = error {
+                    youtubeAuth.markError("Reconnect YouTube — import needs an extra permission.")
+                }
+            }
+            isWorking = false
+        }
+    }
+
+    private func runAnalysis() async throws {
+        guard let sourceURL else { return }
+
+        appendLog("Checking local tools")
+        guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
+        guard let ffprobe = await ToolLocator.find("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
+        guard let whisper = await ToolLocator.find("whisper") else { throw Clip4XError.missingTool("whisper") }
+
+        let mediaTools = MediaTools(ffmpegPath: ffmpeg, ffprobePath: ffprobe)
+        let workDirectory = try makeWorkDirectory()
+        let audioURL = workDirectory.appendingPathComponent("source.wav")
+        let transcriptDirectory = workDirectory.appendingPathComponent("transcript")
+
+        status = "Reading video"
+        let duration = try await mediaTools.probeDuration(videoURL: sourceURL)
+
+        status = "Extracting audio"
+        try await mediaTools.extractAudio(videoURL: sourceURL, destinationURL: audioURL)
+
+        status = "Transcribing with Whisper"
+        let transcriber = WhisperTranscriber(whisperPath: whisper, model: "base")
+        let segments = try await transcriber.transcribe(audioURL: audioURL, outputDirectory: transcriptDirectory)
+        transcriptCount = segments.count
+
+        status = "Finding clip moments"
+        let detector = ClipMomentDetector()
+        let fallbackClips = detector.detect(in: segments, sourceDuration: duration)
+
+        if let codex = await ToolLocator.find("codex") {
+            do {
+                status = "Ranking moments with Codex CLI"
+                let ranker = CodexMomentRanker(codexPath: codex)
+                let codexClips = try await ranker.rank(
+                    segments: segments,
+                    sourceDuration: duration,
+                    workDirectory: workDirectory.appendingPathComponent("codex")
+                )
+                clips = codexClips.isEmpty ? fallbackClips : codexClips
+                appendLog("Codex-ranked clips: \(clips.count)")
+            } catch {
+                clips = fallbackClips
+                appendLog("Codex ranking failed; used local heuristic: \(error.localizedDescription)")
+            }
+        } else {
+            clips = fallbackClips
+            appendLog("Codex CLI missing; used local heuristic")
+        }
+
+        status = clips.isEmpty ? "No clips found" : "Found \(clips.count) clip candidates"
+        appendLog("Transcript segments: \(segments.count)")
+        appendLog("Clip candidates: \(clips.count)")
     }
 
     func exportSelected() {

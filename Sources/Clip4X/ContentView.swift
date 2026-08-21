@@ -6,6 +6,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @State private var previewClip: ClipCandidate?
+    @State private var youtubeURL = ""
 
     var body: some View {
         ZStack {
@@ -72,6 +73,7 @@ struct ContentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 dropZone
+                youtubeImportField
                 formatSection
                 actionSection
                 YouTubeSection(auth: model.youtubeAuth)
@@ -133,6 +135,51 @@ struct ContentView: View {
             model.loadVideo(url)
             return true
         }
+    }
+
+    private var youtubeImportField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionLabel("Or paste your YouTube URL")
+
+            HStack(spacing: 8) {
+                TextField("https://youtube.com/watch?v=…", text: $youtubeURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .disabled(!canImportYouTube)
+                    .onSubmit { importYouTube() }
+
+                Button {
+                    importYouTube()
+                } label: {
+                    Text("Import")
+                }
+                .buttonStyle(OutlineButtonStyle(compact: true))
+                .disabled(!canImportYouTube || youtubeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Text(youtubeImportHint)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(MDColor.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var canImportYouTube: Bool {
+        model.youtubeAuth.canImportOwnVideos && !model.isWorking
+    }
+
+    private var youtubeImportHint: String {
+        if model.youtubeAuth.canImportOwnVideos {
+            return "Only videos on your connected channel."
+        }
+        if model.youtubeAuth.isConnected {
+            return "Reconnect YouTube to import your own videos."
+        }
+        return "Connect YouTube below to import your own videos."
+    }
+
+    private func importYouTube() {
+        model.importYouTubeVideo(youtubeURL)
     }
 
     private var formatSection: some View {
@@ -298,7 +345,7 @@ struct ContentView: View {
             Text("No clips yet")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(MDColor.onSurface)
-            Text("Drop a video, run Find Clips, then pick the strongest moments.")
+            Text("Drop a video or import one of your YouTube videos, then run Find Clips.")
                 .font(.system(size: 14))
                 .foregroundStyle(MDColor.muted)
         }
@@ -592,6 +639,18 @@ private struct YouTubeSection: View {
                 .disabled(model.isWorking)
             } else {
                 connected
+            }
+
+            if auth.isConnected && !auth.canImportOwnVideos {
+                Button {
+                    model.disconnectYouTube()
+                    model.connectYouTube()
+                } label: {
+                    Label("Reconnect YouTube", systemImage: "arrow.triangle.2.circlepath")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TonalButtonStyle())
+                .disabled(model.isWorking)
             }
 
             if let error = auth.lastError {

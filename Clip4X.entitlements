@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Outbound HTTPS for OAuth + YouTube Data API uploads. -->
+    <!-- Outbound HTTPS for OAuth, Data API ownership checks, and uploads. -->
     <key>com.apple.security.network.client</key>
     <true/>
 </dict>
