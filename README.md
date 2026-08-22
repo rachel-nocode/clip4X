@@ -18,6 +18,7 @@ Runs entirely on your machine. No uploads, no cloud, no accounts.
 ## Features
 
 - **Drag-and-drop** any FFmpeg-readable video (MP4, MOV, …).
+- **Import your own YouTube video** — paste a URL after connecting your channel.
 - **Local transcription** with [`openai-whisper`](https://github.com/openai/whisper) — timestamped segments.
 - **Moment ranking** via the Codex CLI to surface cohesive, viral-friendly clips.
 - **One-click export** to `9:16` (vertical) or `1:1` (square).
@@ -47,11 +48,17 @@ variable, then click **Connect**.
    > and Google's token endpoint requires the secret — set both.
 
 3. In the app: **Connect YouTube** → authorize in the browser → **Upload as Shorts**
-   or **Schedule…**.
+   or **Schedule…**. Paste a URL to one of *your* videos to import and clip it.
 
 The OAuth refresh token is stored in the macOS Keychain (`audio.witch.clip4x.youtube`).
 Scheduled uploads use YouTube's native `publishAt` — the app does not need to be
 running at publish time.
+
+Clip4X requests `youtube.upload` (publish Shorts) and `youtube.readonly` (confirm
+the pasted URL is on your channel). Tokens saved before this change need
+**Disconnect** then **Connect** once. Import only accepts videos on the connected
+channel. Private videos may fail to download — grab those from YouTube Studio and
+drop the file instead.
 
 > **Limits (per-user, Testing-mode project):** ~6 uploads/day (`videos.insert` costs
 > 1600 of 10,000 daily quota units), and the OAuth consent may need re-approving every
@@ -63,7 +70,7 @@ running at publish time.
 macOS 14 (Sonoma) or later, plus these tools on your `PATH`:
 
 ```sh
-brew install ffmpeg openai-whisper
+brew install ffmpeg openai-whisper yt-dlp
 ```
 
 | Tool       | Used for                                              |
@@ -71,6 +78,7 @@ brew install ffmpeg openai-whisper
 | `ffmpeg`   | Rendering clips (blurred fill, overlays, captions)    |
 | `ffprobe`  | Reading source media metadata                         |
 | `whisper`  | Local timestamped transcription                       |
+| `yt-dlp`   | Downloading your own YouTube videos for import        |
 | `codex`    | Ranking transcript segments into clip candidates      |
 
 ## Run from source

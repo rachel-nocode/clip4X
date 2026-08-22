@@ -16,6 +16,14 @@ final class YouTubeAuthManager: ObservableObject {
     @Published private(set) var config: YouTubeConfig?
     var isConfigured: Bool { config != nil }
 
+    /// True when connected and the token is not known to lack `youtube.readonly`.
+    /// Missing/empty recorded scopes still allow an import attempt; a 403 prompts reconnect.
+    var canImportOwnVideos: Bool {
+        guard isConnected else { return false }
+        guard let raw = authState?.scope, !raw.isEmpty else { return true }
+        return hasScope(YouTubeConfig.readonlyScope)
+    }
+
     private var authState: OIDAuthState? {
         didSet { isConnected = authState?.isAuthorized ?? false }
     }
@@ -70,7 +78,7 @@ final class YouTubeAuthManager: ObservableObject {
             configuration: serviceConfig,
             clientId: config.clientID,
             clientSecret: config.clientSecret,
-            scopes: [YouTubeConfig.scope],
+            scopes: YouTubeConfig.scopes,
             redirectURL: redirectURI,
             responseType: OIDResponseTypeCode,
             additionalParameters: ["access_type": "offline", "prompt": "consent"]
@@ -98,7 +106,12 @@ final class YouTubeAuthManager: ObservableObject {
 
     func disconnect() {
         authState = nil
+        lastError = nil
         Self.deleteFromKeychain()
+    }
+
+    func markError(_ message: String) {
+        lastError = message
     }
 
     /// Builds the AppAuth completion callback in a nonisolated context so it can
@@ -128,6 +141,18 @@ final class YouTubeAuthManager: ObservableObject {
     }
 
     // MARK: - Token access
+
+    private func hasScope(_ needed: String) -> Bool {
+        guard let raw = authState?.scope, !raw.isEmpty else { return false }
+        let granted = Set(
+            raw.split { $0 == " " || $0 == "," }.map(String.init)
+        )
+        if granted.contains(needed) { return true }
+        if let shortName = needed.split(separator: "/").last {
+            return granted.contains(String(shortName))
+        }
+        return false
+    }
 
     /// Returns a fresh access token, refreshing transparently if needed.
     func validToken() async throws -> String {

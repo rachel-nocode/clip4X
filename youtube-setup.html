@@ -62,7 +62,7 @@
 <body>
 <div class="wrap">
   <h1>Connect YouTube to Clip4X</h1>
-  <p class="sub">One-time setup so Clip4X can upload your clips as Shorts under your own account. ~5 minutes. Free.</p>
+  <p class="sub">One-time setup so Clip4X can import your own YouTube videos and upload Shorts under your account. ~5 minutes. Free.</p>
 
   <div class="callout">
     <strong>Why your own credentials?</strong> Clip4X is open source, so it ships no shared
@@ -89,7 +89,7 @@
       Under <strong>APIs &amp; Services → OAuth consent screen</strong>, choose
       <strong>External</strong>, fill in the app name and your email, and save.
       When prompted for scopes you can skip adding any — Clip4X requests
-      <code>youtube.upload</code> at sign-in.
+      <code>youtube.upload</code> and <code>youtube.readonly</code> at sign-in.
     </li>
     <li>
       <div class="step-title">Add yourself as a test user</div>
@@ -120,7 +120,10 @@ export CLIP4X_YT_CLIENT_SECRET="GOCSPX-..."</pre>
       <div class="step-title">Connect in the app</div>
       Launch Clip4X → <strong>Connect YouTube</strong> → approve in the browser
       (you'll see an "unverified app" notice — that's expected for your own Testing
-      project; continue). Then use <strong>Upload as Shorts</strong> or <strong>Schedule…</strong>.
+      project; continue). Then paste a URL to one of your videos to import it,
+      or use <strong>Upload as Shorts</strong> / <strong>Schedule…</strong>.
+      If you connected before import existed, click <strong>Reconnect YouTube</strong>
+      so the new <code>youtube.readonly</code> permission is granted.
     </li>
   </ol>
   </div>
@@ -132,6 +135,7 @@ export CLIP4X_YT_CLIENT_SECRET="GOCSPX-..."</pre>
     <tr><td>Upload now</td><td>Publishes as <strong>public</strong> immediately.</td></tr>
     <tr><td>Schedule</td><td>Uploads as <strong>private</strong> with a <code>publishAt</code> time; YouTube auto-publishes. Clip4X need not be running then.</td></tr>
     <tr><td>Token storage</td><td>Refresh token kept in the macOS Keychain (<code>audio.witch.clip4x.youtube</code>).</td></tr>
+    <tr><td>Import your videos</td><td>Paste a URL to a video on the connected channel. Private videos may need a Studio download + drop instead.</td></tr>
   </table>
 
   <div class="callout warn">
