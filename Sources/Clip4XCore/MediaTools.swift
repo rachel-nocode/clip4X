@@ -55,17 +55,51 @@ public struct MediaTools: Sendable {
         clip: ClipCandidate,
         ratio: ExportRatio,
         overlays: [TimedOverlay],
-        destinationURL: URL
+        destinationURL: URL,
+        layout: ResolvedLayout = .fit
     ) async throws {
-        let size = ratio.outputSize
-        let baseFilter = [
-            "[0:v]split=2[bg][fg]",
-            "[bg]scale=\(size.width):\(size.height):force_original_aspect_ratio=increase,crop=\(size.width):\(size.height),gblur=sigma=32,eq=brightness=-0.06:saturation=1.12[bgv]",
-            "[fg]scale=\(size.width):\(size.height):force_original_aspect_ratio=decrease[fgv]",
-            "[bgv][fgv]overlay=(W-w)/2:(H-h)/2,setsar=1[v0]"
-        ]
+        _ = try await runComposition(
+            videoURL: videoURL,
+            start: clip.start,
+            duration: clip.duration,
+            ratio: ratio,
+            overlays: overlays,
+            destinationURL: destinationURL,
+            layout: layout,
+            singleFrame: false
+        )
+    }
 
-        var filterParts = baseFilter
+    public func exportPreviewFrame(
+        videoURL: URL,
+        at seconds: Double,
+        ratio: ExportRatio,
+        destinationURL: URL,
+        layout: ResolvedLayout = .fit
+    ) async throws {
+        _ = try await runComposition(
+            videoURL: videoURL,
+            start: max(0, seconds),
+            duration: 0.12,
+            ratio: ratio,
+            overlays: [],
+            destinationURL: destinationURL,
+            layout: layout,
+            singleFrame: true
+        )
+    }
+
+    private func runComposition(
+        videoURL: URL,
+        start: Double,
+        duration: Double,
+        ratio: ExportRatio,
+        overlays: [TimedOverlay],
+        destinationURL: URL,
+        layout: ResolvedLayout,
+        singleFrame: Bool
+    ) async throws {
+        var filterParts = CompositionFilter.baseGraph(ratio: ratio, layout: layout)
         var inputLabel = "v0"
         for (index, overlay) in overlays.enumerated() {
             let inputIndex = index + 1
@@ -74,30 +108,41 @@ public struct MediaTools: Sendable {
             filterParts.append("[\(inputLabel)][ov\(inputIndex)]overlay=0:0:enable='between(t,\(String(format: "%.3f", overlay.start)),\(String(format: "%.3f", overlay.end)))'[\(outputLabel)]")
             inputLabel = outputLabel
         }
-        filterParts.append("[\(inputLabel)]format=yuv420p[vout]")
+        filterParts.append("[\(inputLabel)]format=\(singleFrame ? "rgba" : "yuv420p")[vout]")
 
         var arguments = [
             "-y",
-            "-ss", String(format: "%.3f", clip.start),
+            "-ss", String(format: "%.3f", start),
             "-i", videoURL.path,
         ]
         for overlay in overlays {
             arguments.append(contentsOf: ["-loop", "1", "-i", overlay.url.path])
         }
         arguments.append(contentsOf: [
-            "-t", String(format: "%.3f", clip.duration),
+            "-t", String(format: "%.3f", max(0.04, duration)),
             "-filter_complex", filterParts.joined(separator: ";"),
             "-map", "[vout]",
-            "-map", "0:a?",
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "18",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-shortest",
-            "-movflags", "+faststart",
-            destinationURL.path
         ])
+
+        if singleFrame {
+            arguments.append(contentsOf: [
+                "-frames:v", "1",
+                "-update", "1",
+                destinationURL.path
+            ])
+        } else {
+            arguments.append(contentsOf: [
+                "-map", "0:a?",
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "18",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-shortest",
+                "-movflags", "+faststart",
+                destinationURL.path
+            ])
+        }
 
         _ = try await ProcessRunner.run(ffmpegPath, arguments)
     }

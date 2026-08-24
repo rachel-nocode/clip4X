@@ -23,6 +23,99 @@ public enum ExportRatio: String, CaseIterable, Identifiable, Sendable {
     public var aspectRatio: Double {
         Double(outputSize.width) / Double(outputSize.height)
     }
+
+    public static func parse(_ raw: String) -> ExportRatio? {
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "9:16", "916", "vertical", "portrait": .vertical
+        case "1:1", "11", "square": .square
+        default: nil
+        }
+    }
+}
+
+public enum ExportLayout: String, CaseIterable, Identifiable, Sendable {
+    case auto
+    case stack
+    case face
+    case fit
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .auto: "Auto"
+        case .stack: "Stack"
+        case .face: "Face"
+        case .fit: "Fit"
+        }
+    }
+
+    public var detail: String {
+        switch self {
+        case .auto: "Stack when a demo window is found, else face crop, else fit"
+        case .stack: "Face on the bottom, rounded demo window on top"
+        case .face: "Tight 9:16 crop around the speaker"
+        case .fit: "Keep the full frame, letterboxed on a blur fill"
+        }
+    }
+
+    public var systemImage: String {
+        switch self {
+        case .auto: "wand.and.stars"
+        case .stack: "rectangle.stack"
+        case .face: "person.crop.rectangle"
+        case .fit: "arrow.up.left.and.arrow.down.right"
+        }
+    }
+}
+
+public struct StackStyle: Hashable, Sendable {
+    public var faceBand: Double
+    public var demoTopPadding: Int
+    public var demoSidePadding: Int
+    public var demoOverlap: Int
+    public var cornerRadius: Int
+
+    public init(
+        faceBand: Double = 0.66,
+        demoTopPadding: Int = 56,
+        demoSidePadding: Int = 52,
+        demoOverlap: Int = 96,
+        cornerRadius: Int = 32
+    ) {
+        self.faceBand = min(0.82, max(0.42, faceBand))
+        self.demoTopPadding = PixelMath.even(max(16, demoTopPadding))
+        self.demoSidePadding = PixelMath.even(max(16, demoSidePadding))
+        self.demoOverlap = PixelMath.even(max(0, demoOverlap))
+        self.cornerRadius = max(8, cornerRadius)
+    }
+
+    public static let talkingHead = StackStyle()
+}
+
+public struct ExportOptions: Hashable, Sendable {
+    public var ratio: ExportRatio
+    public var layout: ExportLayout
+    public var style: StackStyle
+    public var faceOverride: NormalizedRect?
+    public var demoOverride: NormalizedRect?
+    public var captions: Bool
+
+    public init(
+        ratio: ExportRatio = .vertical,
+        layout: ExportLayout = .auto,
+        style: StackStyle = .talkingHead,
+        faceOverride: NormalizedRect? = nil,
+        demoOverride: NormalizedRect? = nil,
+        captions: Bool = true
+    ) {
+        self.ratio = ratio
+        self.layout = layout
+        self.style = style
+        self.faceOverride = faceOverride
+        self.demoOverride = demoOverride
+        self.captions = captions
+    }
 }
 
 public struct VideoSize: Hashable, Sendable {

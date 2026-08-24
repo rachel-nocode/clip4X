@@ -4,10 +4,14 @@
 
 # Clip4X
 
-**Local-first macOS app that turns long videos into clean, captioned short clips.**
+**Local-first macOS clipper — app or terminal — that turns long videos into captioned Shorts.**
 
-Drop a video → Whisper transcribes → Codex ranks the strongest moments → FFmpeg exports
-vertical `9:16` or square `1:1` clips with blurred-fill backgrounds and burned-in captions.
+Drop a video (or pass it to `clip4x`) → Whisper transcribes → Codex ranks the strongest
+moments → FFmpeg exports vertical `9:16` or square `1:1` clips.
+
+**Talking-head + demo framing:** `stack` keeps your face in the lower ~66% and floats the
+window you are showing as a rounded card on top. Use `clip4x frame` to tune the crop
+before you encode.
 
 Runs entirely on your machine. No uploads, no cloud, no accounts.
 
@@ -21,8 +25,10 @@ Runs entirely on your machine. No uploads, no cloud, no accounts.
 - **Import your own YouTube video** — paste a URL after connecting your channel.
 - **Local transcription** with [`openai-whisper`](https://github.com/openai/whisper) — timestamped segments.
 - **Moment ranking** via the Codex CLI to surface cohesive, viral-friendly clips.
-- **One-click export** to `9:16` (vertical) or `1:1` (square).
-- **Blurred-fill background** with the source centered, plus sticky hook + caption overlays.
+- **One-click or one-command export** to `9:16` (vertical) or `1:1` (square).
+- **Framing modes:** `auto`, `stack` (face + rounded demo window), `face`, `fit`.
+- **Terminal CLI** (`clip4x`) — analyze, preview a still, pin regions, export.
+- **Blurred-fill background**, sticky hook + caption overlays.
 - **Dark mode UI** built in SwiftUI.
 - **Post to YouTube Shorts** directly — connect your account via OAuth, upload now or schedule.
 - Exports land in `~/Desktop/Clip4X Exports` by default (configurable in-app).
@@ -81,7 +87,50 @@ brew install ffmpeg openai-whisper yt-dlp
 | `yt-dlp`   | Downloading your own YouTube videos for import        |
 | `codex`    | Ranking transcript segments into clip candidates      |
 
-## Run from source
+## Precise talking-head + demo crop
+
+Letterboxing a landscape recording into 9:16 makes both you and the product tiny.
+A face-only crop keeps you, but cuts the window you are demoing.
+
+Record landscape with your face large in the **lower half** and the UI visible
+**above you or beside you**. Then:
+
+```sh
+# 1. Preview one frame (PNG). Prints detected face/demo as x,y,w,h (0...1, top-left).
+swift run clip4x -- frame talk.mov --layout stack --at 8 --json --out /tmp/preview.png
+
+# 2. If the window or face is off, pin the regions and re-preview.
+swift run clip4x -- frame talk.mov --layout stack --at 8 \
+  --face 0.22,0.46,0.56,0.50 \
+  --demo 0.16,0.04,0.68,0.36 \
+  --out /tmp/preview.png
+
+# 3. Export clips once the still looks right.
+swift run clip4x -- run talk.mov --layout stack --out ~/Desktop/Clip4X\ Exports
+```
+
+| Layout | What it does |
+|--------|----------------|
+| `auto` | Stack when a demo window is found, else face crop, else fit |
+| `stack` | Face on the bottom, rounded demo card on top (Shorts look) |
+| `face` | Tight crop around the speaker |
+| `fit` | Full frame, letterboxed on a blur fill |
+
+`--face` / `--demo` are normalized `x,y,w,h` in **0...1**, origin **top-left**.
+`--face-band` (default `0.66`) is how much of the 9:16 frame the face occupies.
+
+## Terminal
+
+```sh
+swift run clip4x -- help
+swift run clip4x -- analyze talk.mov --json
+swift run clip4x -- export talk.mov --start 12 --end 48 --layout stack --title "The hook"
+swift run clip4x -- frame talk.mov --layout stack --out /tmp/preview.png
+```
+
+A video path with no verb runs the full pipeline (`analyze` + `export`).
+
+## Run the app from source
 
 ```sh
 swift run Clip4X
@@ -92,7 +141,8 @@ swift run Clip4X
 ```
 Sources/
   Clip4X/          SwiftUI app (UI, AppModel)
-  Clip4XCore/      Pipeline: transcription, ranking, FFmpeg, captions
+  Clip4XCLI/       Terminal entry point (`clip4x`)
+  Clip4XCore/      Pipeline: transcription, ranking, FFmpeg, captions, framing
 Assets/AppIcon/    App icon (.icns + iconset)
 ```
 

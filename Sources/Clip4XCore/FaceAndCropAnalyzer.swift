@@ -1,14 +1,17 @@
 import AVFoundation
+import CoreGraphics
 import Foundation
 import Vision
 
 public struct FrameAnalysis: Sendable {
     public var cropPlan: CropPlan
     public var textLayout: TextLayout
+    public var scene: ScenePlan
 
-    public init(cropPlan: CropPlan, textLayout: TextLayout) {
+    public init(cropPlan: CropPlan, textLayout: TextLayout, scene: ScenePlan) {
         self.cropPlan = cropPlan
         self.textLayout = textLayout
+        self.scene = scene
     }
 }
 
@@ -21,14 +24,50 @@ public struct FaceAndCropAnalyzer: Sendable {
         ratio: ExportRatio,
         sourceSize: VideoSize
     ) async -> FrameAnalysis {
-        let samples = sampleFaces(videoURL: videoURL, clip: clip)
-        let focus = averageFocus(from: samples) ?? CGPoint(x: 0.5, y: 0.5)
-        let cropPlan = makeCropPlan(sourceSize: sourceSize, targetAspect: ratio.aspectRatio, focus: focus)
-        let layout = makeTextLayout(samples: samples)
-        return FrameAnalysis(cropPlan: cropPlan, textLayout: layout)
+        let scene = analyzeScene(videoURL: videoURL, clip: clip, sourceSize: sourceSize)
+        let resolved = scene.resolve(layout: .face, ratio: ratio, style: .talkingHead)
+        let cropPlan: CropPlan
+        if case let .face(plan) = resolved {
+            cropPlan = plan
+        } else {
+            cropPlan = makeAspectCrop(
+                sourceSize: sourceSize,
+                targetAspect: ratio.aspectRatio,
+                focus: scene.face ?? NormalizedRect(x: 0.2, y: 0.15, width: 0.6, height: 0.7)
+            )
+        }
+        return FrameAnalysis(cropPlan: cropPlan, textLayout: scene.textLayout, scene: scene)
     }
 
-    private func sampleFaces(videoURL: URL, clip: ClipCandidate) -> [CGRect] {
+    public func analyzeScene(
+        videoURL: URL,
+        clip: ClipCandidate,
+        sourceSize: VideoSize
+    ) -> ScenePlan {
+        let samples = sampleFrames(videoURL: videoURL, clip: clip)
+        let faces = samples.flatMap(\.faces)
+        let face = NormalizedRect.average(faces)
+        let demoSamples = samples.compactMap { sample in
+            demoCandidate(rectangles: sample.rectangles, textBoxes: sample.textBoxes, face: NormalizedRect.average(sample.faces) ?? face)
+        }
+        let detectedDemo = NormalizedRect.average(demoSamples)
+        let layout = makeTextLayout(samples: faces)
+        return ScenePlan(
+            face: face,
+            demo: detectedDemo ?? face.map(NormalizedRect.fallbackDemo(aroundFace:)),
+            demoDetected: detectedDemo != nil,
+            textLayout: layout,
+            sourceSize: sourceSize
+        )
+    }
+
+    private struct FrameSample {
+        var faces: [NormalizedRect]
+        var rectangles: [NormalizedRect]
+        var textBoxes: [NormalizedRect]
+    }
+
+    private func sampleFrames(videoURL: URL, clip: ClipCandidate) -> [FrameSample] {
         let asset = AVURLAsset(url: videoURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -36,44 +75,95 @@ public struct FaceAndCropAnalyzer: Sendable {
         generator.requestedTimeToleranceAfter = .zero
 
         let duration = max(0.2, clip.duration)
-        let seconds = [0.18, 0.5, 0.82].map { clip.start + duration * $0 }
-        var faces: [CGRect] = []
+        let seconds = [0.12, 0.32, 0.50, 0.68, 0.88].map { clip.start + duration * $0 }
+        var samples: [FrameSample] = []
 
         for second in seconds {
             do {
-                let image = try generator.copyCGImage(at: CMTime(seconds: second, preferredTimescale: 600), actualTime: nil)
-                let request = VNDetectFaceRectanglesRequest()
-                let handler = VNImageRequestHandler(cgImage: image)
-                try handler.perform([request])
-                let observations = request.results ?? []
-                faces.append(contentsOf: observations.map(\.boundingBox))
+                let image = try generator.copyCGImage(
+                    at: CMTime(seconds: second, preferredTimescale: 600),
+                    actualTime: nil
+                )
+                samples.append(detectRegions(in: image))
             } catch {
                 continue
             }
         }
 
-        return faces
+        return samples
     }
 
-    private func averageFocus(from faces: [CGRect]) -> CGPoint? {
-        guard !faces.isEmpty else { return nil }
+    private func detectRegions(in image: CGImage) -> FrameSample {
+        let handler = VNImageRequestHandler(cgImage: image)
+        let faceRequest = VNDetectFaceRectanglesRequest()
+        let rectangleRequest = VNDetectRectanglesRequest()
+        rectangleRequest.minimumAspectRatio = 0.28
+        rectangleRequest.maximumAspectRatio = 3.2
+        rectangleRequest.minimumSize = 0.10
+        rectangleRequest.maximumObservations = 8
+        rectangleRequest.quadratureTolerance = 22
+        rectangleRequest.minimumConfidence = 0.35
 
-        let totalArea = faces.reduce(CGFloat(0)) { $0 + max(0.001, $1.width * $1.height) }
-        let x = faces.reduce(CGFloat(0)) { partial, face in
-            partial + face.midX * max(0.001, face.width * face.height)
-        } / totalArea
-        let y = faces.reduce(CGFloat(0)) { partial, face in
-            partial + face.midY * max(0.001, face.width * face.height)
-        } / totalArea
+        var faces: [NormalizedRect] = []
+        var rectangles: [NormalizedRect] = []
+        var textBoxes: [NormalizedRect] = []
 
-        return CGPoint(x: x, y: y)
+        do {
+            try handler.perform([faceRequest, rectangleRequest])
+            faces = (faceRequest.results ?? []).map { fromVision($0.boundingBox) }
+            rectangles = (rectangleRequest.results ?? []).map { fromVision($0.boundingBox) }
+        } catch {
+            return FrameSample(faces: faces, rectangles: rectangles, textBoxes: textBoxes)
+        }
+
+        if rectangles.isEmpty {
+            let textRequest = VNRecognizeTextRequest()
+            textRequest.recognitionLevel = .fast
+            textRequest.usesLanguageCorrection = false
+            do {
+                try handler.perform([textRequest])
+                textBoxes = (textRequest.results ?? []).map { fromVision($0.boundingBox) }
+            } catch {
+                // Text is a fallback detector only.
+            }
+        }
+
+        return FrameSample(faces: faces, rectangles: rectangles, textBoxes: textBoxes)
     }
 
-    private func makeTextLayout(samples: [CGRect]) -> TextLayout {
+    private func demoCandidate(
+        rectangles: [NormalizedRect],
+        textBoxes: [NormalizedRect],
+        face: NormalizedRect?
+    ) -> NormalizedRect? {
+        let usableRects = rectangles.filter { rect in
+            guard rect.area >= 0.08 else { return false }
+            if let face, rect.overlapRatio(with: face) > 0.35 { return false }
+            return true
+        }
+        .sorted { lhs, rhs in
+            if abs(lhs.area - rhs.area) > 0.04 { return lhs.area > rhs.area }
+            return lhs.y < rhs.y
+        }
+        if let best = usableRects.first {
+            return best.inset(by: -0.015)
+        }
+
+        let usableText = textBoxes.filter { box in
+            if let face, box.overlapRatio(with: face) > 0.40 { return false }
+            return true
+        }
+        if let cluster = NormalizedRect.union(usableText), cluster.area >= 0.10 {
+            return cluster.inset(by: -0.02)
+        }
+        return nil
+    }
+
+    private func makeTextLayout(samples: [NormalizedRect]) -> TextLayout {
         guard !samples.isEmpty else { return .split }
 
-        let topHits = samples.filter { $0.maxY > 0.64 }.count
-        let bottomHits = samples.filter { $0.minY < 0.36 }.count
+        let topHits = samples.filter { $0.y < 0.36 }.count
+        let bottomHits = samples.filter { $0.maxY > 0.64 }.count
 
         if bottomHits > topHits {
             return TextLayout(hookBand: .top, captionBand: .top)
@@ -84,31 +174,13 @@ public struct FaceAndCropAnalyzer: Sendable {
         return .split
     }
 
-    private func makeCropPlan(sourceSize: VideoSize, targetAspect: Double, focus: CGPoint) -> CropPlan {
-        let sourceAspect = Double(sourceSize.width) / Double(sourceSize.height)
-
-        if sourceAspect > targetAspect {
-            let cropHeight = even(sourceSize.height)
-            let cropWidth = even(Int(Double(cropHeight) * targetAspect))
-            let targetCenterX = Int(focus.x * Double(sourceSize.width))
-            let rawX = targetCenterX - cropWidth / 2
-            let x = even(clamp(rawX, min: 0, max: sourceSize.width - cropWidth))
-            return CropPlan(x: x, y: 0, width: cropWidth, height: cropHeight)
-        } else {
-            let cropWidth = even(sourceSize.width)
-            let cropHeight = even(Int(Double(cropWidth) / targetAspect))
-            let targetCenterYFromTop = Int((1 - focus.y) * Double(sourceSize.height))
-            let rawY = targetCenterYFromTop - cropHeight / 2
-            let y = even(clamp(rawY, min: 0, max: sourceSize.height - cropHeight))
-            return CropPlan(x: 0, y: y, width: cropWidth, height: cropHeight)
-        }
-    }
-
-    private func clamp(_ value: Int, min: Int, max: Int) -> Int {
-        Swift.max(min, Swift.min(max, value))
-    }
-
-    private func even(_ value: Int) -> Int {
-        value - value % 2
+    /// Vision boxes are origin-bottom-left. Convert to top-left normalized space.
+    private func fromVision(_ box: CGRect) -> NormalizedRect {
+        NormalizedRect(
+            x: Double(box.origin.x),
+            y: Double(1 - box.origin.y - box.height),
+            width: Double(box.width),
+            height: Double(box.height)
+        ).clamped()
     }
 }
