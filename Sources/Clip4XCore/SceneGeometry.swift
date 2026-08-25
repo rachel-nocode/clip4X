@@ -221,6 +221,13 @@ public enum ResolvedLayout: Hashable, Sendable {
     case fit
     case face(CropPlan)
     case stack(face: CropPlan, demo: CropPlan, style: StackStyle)
+
+    /// Stack junction offsets apply only after `auto` (or an explicit request)
+    /// has resolved to a face+demo stack — never for unresolved `.auto`.
+    public var usesStackPlacement: Bool {
+        if case .stack = self { return true }
+        return false
+    }
 }
 
 func makeAspectCrop(sourceSize: VideoSize, targetAspect: Double, focus: NormalizedRect) -> CropPlan {

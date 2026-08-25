@@ -73,6 +73,11 @@ import Testing
     } else {
         Issue.record("Expected face crop when no demo window was detected")
     }
+
+    #expect(stacked.usesStackPlacement)
+    #expect(!faceOnly.usesStackPlacement)
+    #expect(CaptionOverlayRenderer().hookOffsetFromTop(ratio: .vertical, layout: faceOnly) == 220)
+    #expect(CaptionOverlayRenderer().hookOffsetFromTop(ratio: .vertical, layout: stacked) == 720)
 }
 
 @Test func faceOverrideWinsOnScenePlan() throws {
@@ -80,4 +85,13 @@ import Testing
     let options = ExportOptions(faceOverride: try NormalizedRect.parse("0.1,0.2,0.3,0.4"))
     let applied = source.applying(options)
     #expect(applied.face?.width == 0.3)
+}
+
+@Test func exportReuseRequiresMatchingLayoutFolder() {
+    let autoURL = URL(fileURLWithPath: "/tmp/talk/9:16-auto/clip.mp4")
+    let stackURL = URL(fileURLWithPath: "/tmp/talk/9:16-stack/clip.mp4")
+    #expect(ClipFileName.layoutFolder(ratio: .vertical, layout: .auto) == "9:16-auto")
+    #expect(ClipFileName.matchesLayoutFolder(autoURL, ratio: .vertical, layout: .auto))
+    #expect(!ClipFileName.matchesLayoutFolder(autoURL, ratio: .vertical, layout: .stack))
+    #expect(ClipFileName.matchesLayoutFolder(stackURL, ratio: .vertical, layout: .stack))
 }

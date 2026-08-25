@@ -38,3 +38,28 @@ import Testing
         _ = try ClipCommand.parse(["analyze", "a.mp4", "--nope", "1"])
     }
 }
+
+@Test func parseHelpIgnoresOptionValues() throws {
+    let titled = try ClipCommand.parse(["export", "demo.mp4", "--title", "help"])
+    #expect(titled.verb == .export)
+    #expect(titled.title == "help")
+
+    let out = try ClipCommand.parse(["run", "talk.mov", "--out", "help"])
+    #expect(out.verb == .run)
+    #expect(out.outputPath == "help")
+
+    #expect(try ClipCommand.parse(["run", "talk.mov", "--help"]).verb == .help)
+    #expect(try ClipCommand.parse(["-h"]).verb == .help)
+}
+
+@Test func runWithManualWindowDoesNotNeedWhisper() throws {
+    let windowed = try ClipCommand.parse(["run", "talk.mov", "--start", "2", "--end", "10"])
+    #expect(windowed.hasManualWindow)
+    #expect(!windowed.requiresWhisper)
+
+    let detect = try ClipCommand.parse(["run", "talk.mov"])
+    #expect(detect.requiresWhisper)
+
+    let exportWindow = try ClipCommand.parse(["export", "talk.mov", "--start", "1", "--end", "4"])
+    #expect(!exportWindow.requiresWhisper)
+}

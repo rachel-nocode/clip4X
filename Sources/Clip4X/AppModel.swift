@@ -159,9 +159,7 @@ final class AppModel: ObservableObject {
         progress = 0
         Task {
             do {
-                let exportRoot = outputDirectory
-                    .appendingPathComponent(sourceURL.deletingPathExtension().lastPathComponent)
-                    .appendingPathComponent("\(selectedRatio.label)-\(selectedLayout.rawValue)")
+                let exportRoot = exportRoot(for: sourceURL)
                 try fileManager.createDirectory(at: exportRoot, withIntermediateDirectories: true)
 
                 let tempDirectory = try makeWorkDirectory()
@@ -197,7 +195,7 @@ final class AppModel: ObservableObject {
         exportRoot: URL,
         tempDirectory: URL
     ) async throws -> URL {
-        if let existing = clip.exportURL, fileManager.fileExists(atPath: existing.path) {
+        if let existing = reusableExportURL(for: clip) {
             return existing
         }
         let pipeline = try await ClipPipeline.make()
@@ -217,12 +215,12 @@ final class AppModel: ObservableObject {
     }
 
     /// Returns a fully-composed clip (blur-fill, hook title, captions) for
-    /// preview. Reuses the exported file if present, otherwise renders into a
-    /// cached temp folder. The filename encodes the ratio so switching format
-    /// re-renders rather than serving a stale preview.
+    /// preview. Reuses the exported file if it matches the current framing,
+    /// otherwise renders into a cached temp folder. The filename encodes ratio
+    /// and layout so switching format re-renders rather than serving a stale preview.
     func composedPreviewURL(for clip: ClipCandidate) async -> URL? {
         guard let sourceURL else { return nil }
-        if let existing = clip.exportURL, fileManager.fileExists(atPath: existing.path) {
+        if let existing = reusableExportURL(for: clip) {
             return existing
         }
         do {
@@ -232,7 +230,7 @@ final class AppModel: ObservableObject {
             try fileManager.createDirectory(at: previewDir, withIntermediateDirectories: true)
 
             let baseName = ClipFileName.safe(
-                "\(ClipFileName.timecode(clip.start))-\(clip.title)-\(selectedRatio.label)-\(selectedLayout.rawValue)"
+                "\(ClipFileName.timecode(clip.start))-\(clip.title)-\(ClipFileName.layoutFolder(ratio: selectedRatio, layout: selectedLayout))"
             )
             let outputURL = previewDir.appendingPathComponent(baseName).appendingPathExtension("mp4")
             if fileManager.fileExists(atPath: outputURL.path) {
@@ -290,9 +288,7 @@ final class AppModel: ObservableObject {
         progress = 0
         Task {
             do {
-                let exportRoot = outputDirectory
-                    .appendingPathComponent(sourceURL.deletingPathExtension().lastPathComponent)
-                    .appendingPathComponent("\(selectedRatio.label)-\(selectedLayout.rawValue)")
+                let exportRoot = exportRoot(for: sourceURL)
                 try fileManager.createDirectory(at: exportRoot, withIntermediateDirectories: true)
                 let tempDirectory = try makeWorkDirectory()
                 let uploader = YouTubeUploader()
@@ -375,6 +371,20 @@ final class AppModel: ObservableObject {
 
     private func appendLog(_ message: String) {
         log.append(message)
+    }
+
+    private func exportRoot(for sourceURL: URL) -> URL {
+        outputDirectory
+            .appendingPathComponent(sourceURL.deletingPathExtension().lastPathComponent)
+            .appendingPathComponent(ClipFileName.layoutFolder(ratio: selectedRatio, layout: selectedLayout))
+    }
+
+    private func reusableExportURL(for clip: ClipCandidate) -> URL? {
+        guard let existing = clip.exportURL,
+              fileManager.fileExists(atPath: existing.path),
+              ClipFileName.matchesLayoutFolder(existing, ratio: selectedRatio, layout: selectedLayout)
+        else { return nil }
+        return existing
     }
 
     private func markExported(clipID: UUID, url: URL) {

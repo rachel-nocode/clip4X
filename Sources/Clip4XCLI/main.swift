@@ -28,10 +28,7 @@ struct Clip4XCLI {
             throw Clip4XError.invalidMedia("Cannot read \(videoURL.path).")
         }
 
-        let needsWhisper = invocation.verb == .analyze
-            || invocation.verb == .run
-            || (invocation.verb == .export && (invocation.start == nil || invocation.end == nil))
-        let pipeline = try await ClipPipeline.make(requireWhisper: needsWhisper)
+        let pipeline = try await ClipPipeline.make(requireWhisper: invocation.requiresWhisper)
         let workDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("clip4x-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
 
@@ -113,7 +110,7 @@ struct Clip4XCLI {
     ) async throws {
         let sourceSize = try await pipeline.mediaTools.probeVideoSize(videoURL: videoURL)
         let clips: [ClipCandidate]
-        if let start = invocation.start, let end = invocation.end, end > start {
+        if invocation.hasManualWindow, let start = invocation.start, let end = invocation.end {
             clips = [
                 ClipCandidate(
                     title: invocation.title ?? "clip",
@@ -204,7 +201,7 @@ struct Clip4XCLI {
             .appendingPathComponent("Desktop")
             .appendingPathComponent("Clip4X Exports")
             .appendingPathComponent(videoURL.deletingPathExtension().lastPathComponent)
-            .appendingPathComponent("\(invocation.ratio.label)-\(invocation.layout.rawValue)")
+            .appendingPathComponent(ClipFileName.layoutFolder(ratio: invocation.ratio, layout: invocation.layout))
     }
 
     private static func outputURL(invocation: ClipInvocation, defaultDirectory: URL, fileName: String) -> URL {

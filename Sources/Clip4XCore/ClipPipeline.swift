@@ -137,7 +137,7 @@ public struct ClipPipeline: Sendable {
                 clip: clip,
                 ratio: options.ratio,
                 destinationDirectory: workDirectory.appendingPathComponent("overlays-\(clip.id.uuidString)"),
-                layout: options.layout
+                layout: resolved
             )
         } else {
             overlays = []
@@ -198,5 +198,13 @@ public enum ClipFileName {
 
     public static func clipFile(title: String, start: Double) -> String {
         safe("\(timecode(start))-\(title)")
+    }
+
+    public static func layoutFolder(ratio: ExportRatio, layout: ExportLayout) -> String {
+        "\(ratio.label)-\(layout.rawValue)"
+    }
+
+    public static func matchesLayoutFolder(_ url: URL, ratio: ExportRatio, layout: ExportLayout) -> Bool {
+        url.deletingLastPathComponent().lastPathComponent == layoutFolder(ratio: ratio, layout: layout)
     }
 }

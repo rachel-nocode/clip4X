@@ -62,6 +62,22 @@ public struct ClipInvocation: Equatable, Sendable {
         self.captions = captions
     }
 
+    public var hasManualWindow: Bool {
+        guard let start, let end else { return false }
+        return end > start
+    }
+
+    public var requiresWhisper: Bool {
+        switch verb {
+        case .analyze:
+            true
+        case .export, .run:
+            !hasManualWindow
+        case .frame, .help:
+            false
+        }
+    }
+
     public var exportOptions: ExportOptions {
         ExportOptions(
             ratio: ratio,
@@ -121,7 +137,7 @@ public struct ClipInvocation: Equatable, Sendable {
 
 public enum ClipCommand {
     public static func parse(_ arguments: [String]) throws -> ClipInvocation {
-        if arguments.isEmpty || arguments.contains(where: { ["-h", "--help", "help"].contains($0) }) {
+        if arguments.isEmpty || isHelpRequest(arguments) {
             return ClipInvocation(verb: .help)
         }
 
@@ -173,6 +189,28 @@ public enum ClipCommand {
             throw Clip4XError.invalidMedia("Pass a video path. See clip4x help.")
         }
         return invocation
+    }
+
+    private static let valuelessFlags: Set<String> = ["--json", "--no-captions"]
+
+    /// Help tokens in flag or verb position only — not option values like `--title help`.
+    private static func isHelpRequest(_ arguments: [String]) -> Bool {
+        if let first = arguments.first, ["help", "-h", "--help"].contains(first) {
+            return true
+        }
+        var index = 0
+        while index < arguments.count {
+            let token = arguments[index]
+            if token == "-h" || token == "--help" {
+                return true
+            }
+            if token.hasPrefix("--"), !token.contains("="), !valuelessFlags.contains(token) {
+                index += 2
+                continue
+            }
+            index += 1
+        }
+        return false
     }
 
     private static func apply(flag: String, value: String, to invocation: inout ClipInvocation) throws {

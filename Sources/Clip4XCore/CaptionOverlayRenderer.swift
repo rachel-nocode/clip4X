@@ -8,7 +8,7 @@ public struct CaptionOverlayRenderer: Sendable {
         clip: ClipCandidate,
         ratio: ExportRatio,
         destinationDirectory: URL,
-        layout: ExportLayout = .fit
+        layout: ResolvedLayout = .fit
     ) throws -> [TimedOverlay] {
         try FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
 
@@ -28,7 +28,7 @@ public struct CaptionOverlayRenderer: Sendable {
         return overlays
     }
 
-    private func renderHook(text: String, ratio: ExportRatio, layout: ExportLayout, destinationURL: URL) throws {
+    private func renderHook(text: String, ratio: ExportRatio, layout: ResolvedLayout, destinationURL: URL) throws {
         let size = ratio.outputSize
         let canvas = CGSize(width: size.width, height: size.height)
         let boxWidth = min(canvas.width - 180, ratio == .vertical ? 820 : 740)
@@ -78,23 +78,19 @@ public struct CaptionOverlayRenderer: Sendable {
         }
     }
 
-    private func hookOffsetFromTop(ratio: ExportRatio, layout: ExportLayout) -> CGFloat {
-        if usesStackPlacement(layout), ratio == .vertical {
+    func hookOffsetFromTop(ratio: ExportRatio, layout: ResolvedLayout) -> CGFloat {
+        if layout.usesStackPlacement, ratio == .vertical {
             return 720
         }
         return ratio == .vertical ? 220 : 104
     }
 
-    private func usesStackPlacement(_ layout: ExportLayout) -> Bool {
-        layout == .stack || layout == .auto
-    }
-
-    private func renderCaption(text: String, ratio: ExportRatio, layout: ExportLayout, destinationURL: URL) throws {
+    private func renderCaption(text: String, ratio: ExportRatio, layout: ResolvedLayout, destinationURL: URL) throws {
         let size = ratio.outputSize
         let canvas = CGSize(width: size.width, height: size.height)
         let fontSize: CGFloat = ratio == .vertical ? 72 : 50
         let captionHeight: CGFloat = ratio == .vertical ? 230 : 156
-        let bottomPadding: CGFloat = usesStackPlacement(layout) && ratio == .vertical ? 400 : (ratio == .vertical ? 230 : 96)
+        let bottomPadding: CGFloat = layout.usesStackPlacement && ratio == .vertical ? 400 : (ratio == .vertical ? 230 : 96)
         let rect = CGRect(
             x: 86,
             y: bottomPadding,
