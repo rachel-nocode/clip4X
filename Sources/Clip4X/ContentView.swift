@@ -75,6 +75,7 @@ struct ContentView: View {
                 dropZone
                 youtubeImportField
                 formatSection
+                layoutSection
                 actionSection
                 YouTubeSection(auth: model.youtubeAuth)
                     .environmentObject(model)
@@ -202,6 +203,34 @@ struct ContentView: View {
                     .buttonStyle(ChipButtonStyle(selected: model.selectedRatio == ratio))
                 }
             }
+        }
+    }
+
+    private var layoutSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel("Framing")
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(ExportLayout.allCases) { layout in
+                    Button {
+                        model.selectedLayout = layout
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: layout.systemImage)
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(layout.label)
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(ChipButtonStyle(selected: model.selectedLayout == layout))
+                }
+            }
+
+            Text(model.selectedLayout.detail)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(MDColor.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

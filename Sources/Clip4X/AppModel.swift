@@ -10,6 +10,7 @@ final class AppModel: ObservableObject {
         .appendingPathComponent("Desktop")
         .appendingPathComponent("Clip4X Exports")
     @Published var selectedRatio: ExportRatio = .vertical
+    @Published var selectedLayout: ExportLayout = .auto
     @Published var clips: [ClipCandidate] = []
     @Published var isWorking = false
     /// 0...1 progress for batch work (export/upload). `nil` = indeterminate.
@@ -129,53 +130,20 @@ final class AppModel: ObservableObject {
     private func runAnalysis() async throws {
         guard let sourceURL else { return }
 
-        appendLog("Checking local tools")
-        guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
-        guard let ffprobe = await ToolLocator.find("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
-        guard let whisper = await ToolLocator.find("whisper") else { throw Clip4XError.missingTool("whisper") }
-
-        let mediaTools = MediaTools(ffmpegPath: ffmpeg, ffprobePath: ffprobe)
+        let pipeline = try await ClipPipeline.make()
         let workDirectory = try makeWorkDirectory()
-        let audioURL = workDirectory.appendingPathComponent("source.wav")
-        let transcriptDirectory = workDirectory.appendingPathComponent("transcript")
-
-        status = "Reading video"
-        let duration = try await mediaTools.probeDuration(videoURL: sourceURL)
-
-        status = "Extracting audio"
-        try await mediaTools.extractAudio(videoURL: sourceURL, destinationURL: audioURL)
-
-        status = "Transcribing with Whisper"
-        let transcriber = WhisperTranscriber(whisperPath: whisper, model: "base")
-        let segments = try await transcriber.transcribe(audioURL: audioURL, outputDirectory: transcriptDirectory)
-        transcriptCount = segments.count
-
-        status = "Finding clip moments"
-        let detector = ClipMomentDetector()
-        let fallbackClips = detector.detect(in: segments, sourceDuration: duration)
-
-        if let codex = await ToolLocator.find("codex") {
-            do {
-                status = "Ranking moments with Codex CLI"
-                let ranker = CodexMomentRanker(codexPath: codex)
-                let codexClips = try await ranker.rank(
-                    segments: segments,
-                    sourceDuration: duration,
-                    workDirectory: workDirectory.appendingPathComponent("codex")
-                )
-                clips = codexClips.isEmpty ? fallbackClips : codexClips
-                appendLog("Codex-ranked clips: \(clips.count)")
-            } catch {
-                clips = fallbackClips
-                appendLog("Codex ranking failed; used local heuristic: \(error.localizedDescription)")
-            }
+        status = "Analyzing"
+        appendLog("Checking local tools")
+        let result = try await pipeline.analyze(videoURL: sourceURL, workDirectory: workDirectory)
+        transcriptCount = result.segments.count
+        clips = result.clips
+        if result.usedCodex {
+            appendLog("Codex-ranked clips: \(clips.count)")
         } else {
-            clips = fallbackClips
-            appendLog("Codex CLI missing; used local heuristic")
+            appendLog("Used local heuristic for clip ranking")
         }
-
         status = clips.isEmpty ? "No clips found" : "Found \(clips.count) clip candidates"
-        appendLog("Transcript segments: \(segments.count)")
+        appendLog("Transcript segments: \(result.segments.count)")
         appendLog("Clip candidates: \(clips.count)")
     }
 
@@ -191,24 +159,16 @@ final class AppModel: ObservableObject {
         progress = 0
         Task {
             do {
-                guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
-                guard let ffprobe = await ToolLocator.find("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
-                let mediaTools = MediaTools(ffmpegPath: ffmpeg, ffprobePath: ffprobe)
-                let exportRoot = outputDirectory
-                    .appendingPathComponent(sourceURL.deletingPathExtension().lastPathComponent)
-                    .appendingPathComponent(selectedRatio.label)
+                let exportRoot = exportRoot(for: sourceURL)
                 try fileManager.createDirectory(at: exportRoot, withIntermediateDirectories: true)
 
                 let tempDirectory = try makeWorkDirectory()
-                let overlayRenderer = CaptionOverlayRenderer()
 
                 for (index, clip) in selectedClips.enumerated() {
                     status = "Exporting \(clip.title) (\(index + 1) of \(selectedClips.count))"
                     let outputURL = try await exportClip(
                         clip,
                         sourceURL: sourceURL,
-                        mediaTools: mediaTools,
-                        overlayRenderer: overlayRenderer,
                         exportRoot: exportRoot,
                         tempDirectory: tempDirectory
                     )
@@ -232,66 +192,58 @@ final class AppModel: ObservableObject {
     private func exportClip(
         _ clip: ClipCandidate,
         sourceURL: URL,
-        mediaTools: MediaTools,
-        overlayRenderer: CaptionOverlayRenderer,
         exportRoot: URL,
         tempDirectory: URL
     ) async throws -> URL {
-        if let existing = clip.exportURL, fileManager.fileExists(atPath: existing.path) {
+        if let existing = reusableExportURL(for: clip) {
             return existing
         }
-        let baseName = safeFileName("\(timecode(clip.start))-\(clip.title)")
+        let pipeline = try await ClipPipeline.make()
+        let sourceSize = try await pipeline.mediaTools.probeVideoSize(videoURL: sourceURL)
+        let baseName = ClipFileName.clipFile(title: clip.title, start: clip.start)
         let outputURL = exportRoot.appendingPathComponent(baseName).appendingPathExtension("mp4")
-        let overlays = try overlayRenderer.writeOverlays(
-            clip: clip,
-            ratio: selectedRatio,
-            destinationDirectory: tempDirectory.appendingPathComponent(baseName)
-        )
-        try await mediaTools.exportComposedClip(
+        try await pipeline.exportClip(
             videoURL: sourceURL,
             clip: clip,
-            ratio: selectedRatio,
-            overlays: overlays,
-            destinationURL: outputURL
+            sourceSize: sourceSize,
+            options: ExportOptions(ratio: selectedRatio, layout: selectedLayout),
+            destinationURL: outputURL,
+            workDirectory: tempDirectory
         )
         markExported(clipID: clip.id, url: outputURL)
         return outputURL
     }
 
     /// Returns a fully-composed clip (blur-fill, hook title, captions) for
-    /// preview. Reuses the exported file if present, otherwise renders into a
-    /// cached temp folder. The filename encodes the ratio so switching format
-    /// re-renders rather than serving a stale preview.
+    /// preview. Reuses the exported file if it matches the current framing,
+    /// otherwise renders into a cached temp folder. The filename encodes ratio
+    /// and layout so switching format re-renders rather than serving a stale preview.
     func composedPreviewURL(for clip: ClipCandidate) async -> URL? {
         guard let sourceURL else { return nil }
-        if let existing = clip.exportURL, fileManager.fileExists(atPath: existing.path) {
+        if let existing = reusableExportURL(for: clip) {
             return existing
         }
         do {
-            guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
-            guard let ffprobe = await ToolLocator.find("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
-            let mediaTools = MediaTools(ffmpegPath: ffmpeg, ffprobePath: ffprobe)
+            let pipeline = try await ClipPipeline.make()
+            let sourceSize = try await pipeline.mediaTools.probeVideoSize(videoURL: sourceURL)
             let previewDir = fileManager.temporaryDirectory.appendingPathComponent("clip4x-preview")
             try fileManager.createDirectory(at: previewDir, withIntermediateDirectories: true)
 
-            let baseName = safeFileName("\(timecode(clip.start))-\(clip.title)-\(selectedRatio.label)")
+            let baseName = ClipFileName.safe(
+                "\(ClipFileName.timecode(clip.start))-\(clip.title)-\(ClipFileName.layoutFolder(ratio: selectedRatio, layout: selectedLayout))"
+            )
             let outputURL = previewDir.appendingPathComponent(baseName).appendingPathExtension("mp4")
             if fileManager.fileExists(atPath: outputURL.path) {
                 return outputURL
             }
 
-            let overlayRenderer = CaptionOverlayRenderer()
-            let overlays = try overlayRenderer.writeOverlays(
-                clip: clip,
-                ratio: selectedRatio,
-                destinationDirectory: previewDir.appendingPathComponent(baseName + "-overlays")
-            )
-            try await mediaTools.exportComposedClip(
+            try await pipeline.exportClip(
                 videoURL: sourceURL,
                 clip: clip,
-                ratio: selectedRatio,
-                overlays: overlays,
-                destinationURL: outputURL
+                sourceSize: sourceSize,
+                options: ExportOptions(ratio: selectedRatio, layout: selectedLayout),
+                destinationURL: outputURL,
+                workDirectory: previewDir.appendingPathComponent(baseName + "-work")
             )
             return outputURL
         } catch {
@@ -336,15 +288,9 @@ final class AppModel: ObservableObject {
         progress = 0
         Task {
             do {
-                guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
-                guard let ffprobe = await ToolLocator.find("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
-                let mediaTools = MediaTools(ffmpegPath: ffmpeg, ffprobePath: ffprobe)
-                let exportRoot = outputDirectory
-                    .appendingPathComponent(sourceURL.deletingPathExtension().lastPathComponent)
-                    .appendingPathComponent(selectedRatio.label)
+                let exportRoot = exportRoot(for: sourceURL)
                 try fileManager.createDirectory(at: exportRoot, withIntermediateDirectories: true)
                 let tempDirectory = try makeWorkDirectory()
-                let overlayRenderer = CaptionOverlayRenderer()
                 let uploader = YouTubeUploader()
                 let total = Double(selectedClips.count)
 
@@ -353,8 +299,6 @@ final class AppModel: ObservableObject {
                     let fileURL = try await exportClip(
                         clip,
                         sourceURL: sourceURL,
-                        mediaTools: mediaTools,
-                        overlayRenderer: overlayRenderer,
                         exportRoot: exportRoot,
                         tempDirectory: tempDirectory
                     )
@@ -429,6 +373,20 @@ final class AppModel: ObservableObject {
         log.append(message)
     }
 
+    private func exportRoot(for sourceURL: URL) -> URL {
+        outputDirectory
+            .appendingPathComponent(sourceURL.deletingPathExtension().lastPathComponent)
+            .appendingPathComponent(ClipFileName.layoutFolder(ratio: selectedRatio, layout: selectedLayout))
+    }
+
+    private func reusableExportURL(for clip: ClipCandidate) -> URL? {
+        guard let existing = clip.exportURL,
+              fileManager.fileExists(atPath: existing.path),
+              ClipFileName.matchesLayoutFolder(existing, ratio: selectedRatio, layout: selectedLayout)
+        else { return nil }
+        return existing
+    }
+
     private func markExported(clipID: UUID, url: URL) {
         guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
         clips[index].exportURL = url
@@ -440,15 +398,4 @@ final class AppModel: ObservableObject {
         return url
     }
 
-    private func safeFileName(_ raw: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_ "))
-        let scalars = raw.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
-        let cleaned = String(scalars).replacingOccurrences(of: "  ", with: " ")
-        return String(cleaned.prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func timecode(_ seconds: Double) -> String {
-        let total = max(0, Int(seconds.rounded()))
-        return String(format: "%02d%02d", total / 60, total % 60)
-    }
 }

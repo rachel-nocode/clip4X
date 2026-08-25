@@ -7,32 +7,34 @@ public struct CaptionOverlayRenderer: Sendable {
     public func writeOverlays(
         clip: ClipCandidate,
         ratio: ExportRatio,
-        destinationDirectory: URL
+        destinationDirectory: URL,
+        layout: ResolvedLayout = .fit
     ) throws -> [TimedOverlay] {
         try FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
 
         var overlays: [TimedOverlay] = []
-        // Hook title stays pinned at the top for the entire clip (sticky), not just the intro.
+        // Hook title stays pinned (sticky) for the entire clip. Stack layout sits it
+        // in the face/demo junction so it does not cover the window being shown.
         let hookURL = destinationDirectory.appendingPathComponent("hook-\(clip.id.uuidString).png")
-        try renderHook(text: clip.title, ratio: ratio, destinationURL: hookURL)
+        try renderHook(text: clip.title, ratio: ratio, layout: layout, destinationURL: hookURL)
         overlays.append(TimedOverlay(url: hookURL, start: 0, end: clip.duration))
 
         for (index, caption) in captionChunks(for: clip).enumerated() {
             let captionURL = destinationDirectory.appendingPathComponent("caption-\(clip.id.uuidString)-\(index).png")
-            try renderCaption(text: caption.text, ratio: ratio, destinationURL: captionURL)
+            try renderCaption(text: caption.text, ratio: ratio, layout: layout, destinationURL: captionURL)
             overlays.append(TimedOverlay(url: captionURL, start: caption.start, end: caption.end))
         }
 
         return overlays
     }
 
-    private func renderHook(text: String, ratio: ExportRatio, destinationURL: URL) throws {
+    private func renderHook(text: String, ratio: ExportRatio, layout: ResolvedLayout, destinationURL: URL) throws {
         let size = ratio.outputSize
         let canvas = CGSize(width: size.width, height: size.height)
         let boxWidth = min(canvas.width - 180, ratio == .vertical ? 820 : 740)
         let fontSize: CGFloat = ratio == .vertical ? 48 : 38
         let maxHeight: CGFloat = ratio == .vertical ? 150 : 120
-        let top: CGFloat = ratio == .vertical ? 220 : 104
+        let top: CGFloat = hookOffsetFromTop(ratio: ratio, layout: layout)
         let boxRect = CGRect(
             x: (canvas.width - boxWidth) / 2,
             y: canvas.height - top - maxHeight,
@@ -76,12 +78,19 @@ public struct CaptionOverlayRenderer: Sendable {
         }
     }
 
-    private func renderCaption(text: String, ratio: ExportRatio, destinationURL: URL) throws {
+    func hookOffsetFromTop(ratio: ExportRatio, layout: ResolvedLayout) -> CGFloat {
+        if layout.usesStackPlacement, ratio == .vertical {
+            return 720
+        }
+        return ratio == .vertical ? 220 : 104
+    }
+
+    private func renderCaption(text: String, ratio: ExportRatio, layout: ResolvedLayout, destinationURL: URL) throws {
         let size = ratio.outputSize
         let canvas = CGSize(width: size.width, height: size.height)
         let fontSize: CGFloat = ratio == .vertical ? 72 : 50
         let captionHeight: CGFloat = ratio == .vertical ? 230 : 156
-        let bottomPadding: CGFloat = ratio == .vertical ? 230 : 96
+        let bottomPadding: CGFloat = layout.usesStackPlacement && ratio == .vertical ? 400 : (ratio == .vertical ? 230 : 96)
         let rect = CGRect(
             x: 86,
             y: bottomPadding,
