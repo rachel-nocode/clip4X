@@ -101,6 +101,13 @@ import Testing
         #expect(ZernioScheduler.filesForCurrentBatch(files, metadata: metadata).map(\.lastPathComponent) == ["01-hook-v2.mp4", "02-demo.mp4"])
     }
 
+    @Test func executeRejectsEmptySchedule() async {
+        let schedule = ZernioSchedule(timezone: "UTC", items: [])
+        await #expect(throws: Clip4XError.self) {
+            _ = try await ZernioScheduler().execute(schedule, credentials: ZernioCredentials(apiKey: "secret"))
+        }
+    }
+
     @Test func accountDiscoveryRejectsAmbiguousPlatforms() {
         let accounts = [
             ZernioAccountCandidate(id: "yt-1", platform: "youtube"),
@@ -207,6 +214,16 @@ import Testing
         #expect(ZernioMockURLProtocol.count(method: "POST", suffix: "/posts") == 1)
         #expect(ZernioMockURLProtocol.count(method: "GET", suffix: "/posts/post-1") == 2)
 
+        let manifestDirectory = root.appendingPathComponent(".zernio-batches")
+        let manifestName = try #require(FileManager.default.contentsOfDirectory(atPath: manifestDirectory.path).first)
+        let manifestURL = manifestDirectory.appendingPathComponent(manifestName)
+        var manifest = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any])
+        var items = try #require(manifest["items"] as? [String: Any])
+        var record = try #require(items["clip.mp4"] as? [String: Any])
+        record["postID"] = NSNull()
+        items["clip.mp4"] = record
+        manifest["items"] = items
+        try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
         try Data("changed-video".utf8).write(to: file)
         await #expect(throws: Clip4XError.self) {
             _ = try await scheduler.execute(schedule, credentials: credentials)
@@ -214,8 +231,6 @@ import Testing
         #expect(ZernioMockURLProtocol.count(method: "POST", suffix: "/posts") == 1)
 
         try Data("video".utf8).write(to: file)
-        let manifestDirectory = root.appendingPathComponent(".zernio-batches")
-        let manifestName = try #require(FileManager.default.contentsOfDirectory(atPath: manifestDirectory.path).first)
         try Data("not-json".utf8).write(to: manifestDirectory.appendingPathComponent(manifestName))
         await #expect(throws: Clip4XError.self) {
             _ = try await scheduler.execute(schedule, credentials: credentials)

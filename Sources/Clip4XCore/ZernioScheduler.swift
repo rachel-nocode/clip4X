@@ -281,6 +281,9 @@ public struct ZernioScheduler: Sendable {
         _ schedule: ZernioSchedule,
         credentials initialCredentials: ZernioCredentials
     ) async throws -> [VerifiedZernioPost] {
+        guard !schedule.items.isEmpty else {
+            throw Clip4XError.invalidMedia("No videos found to schedule.")
+        }
         let credentials = initialCredentials
         var discovered: [ZernioAccountCandidate] = []
         if credentials.youtubeAccountID == nil || credentials.tiktokAccountID == nil {
@@ -318,12 +321,12 @@ public struct ZernioScheduler: Sendable {
                 tiktokID: tiktokID
             )
             var record = manifest.items[name]
-            if record?.fingerprint != fingerprint {
-                if record?.postID != nil {
-                    throw Clip4XError.exportFailed(
-                        "\(name) changed after scheduling; reconcile the existing Zernio post before retrying."
-                    )
-                }
+            if let existing = record, existing.fingerprint != fingerprint {
+                throw Clip4XError.exportFailed(
+                    "\(name) changed after scheduling began; reconcile the Zernio batch before retrying."
+                )
+            }
+            if record == nil {
                 record = ManifestItem(
                     requestID: UUID().uuidString,
                     scheduledFor: item.localDateTime,
