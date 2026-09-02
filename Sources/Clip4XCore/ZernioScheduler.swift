@@ -298,8 +298,16 @@ public struct ZernioScheduler: Sendable {
         let tiktokID = resolved.tiktok
 
         let manifestURL = try manifestURL(for: schedule)
-        var manifest = (try? JSONDecoder().decode(BatchManifest.self, from: Data(contentsOf: manifestURL)))
-            ?? BatchManifest(timezone: schedule.timezone, items: [:])
+        var manifest: BatchManifest
+        if FileManager.default.fileExists(atPath: manifestURL.path) {
+            do {
+                manifest = try JSONDecoder().decode(BatchManifest.self, from: Data(contentsOf: manifestURL))
+            } catch {
+                throw Clip4XError.exportFailed("Zernio batch manifest is unreadable; reconcile it before retrying.")
+            }
+        } else {
+            manifest = BatchManifest(timezone: schedule.timezone, items: [:])
+        }
         var verified: [VerifiedZernioPost] = []
         for item in schedule.items {
             let name = item.source.fileURL.lastPathComponent
@@ -311,6 +319,11 @@ public struct ZernioScheduler: Sendable {
             )
             var record = manifest.items[name]
             if record?.fingerprint != fingerprint {
+                if record?.postID != nil {
+                    throw Clip4XError.exportFailed(
+                        "\(name) changed after scheduling; reconcile the existing Zernio post before retrying."
+                    )
+                }
                 record = ManifestItem(
                     requestID: UUID().uuidString,
                     scheduledFor: item.localDateTime,

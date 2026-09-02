@@ -206,6 +206,21 @@ import Testing
         #expect(ZernioMockURLProtocol.count(method: "PUT", suffix: "/upload") == 1)
         #expect(ZernioMockURLProtocol.count(method: "POST", suffix: "/posts") == 1)
         #expect(ZernioMockURLProtocol.count(method: "GET", suffix: "/posts/post-1") == 2)
+
+        try Data("changed-video".utf8).write(to: file)
+        await #expect(throws: Clip4XError.self) {
+            _ = try await scheduler.execute(schedule, credentials: credentials)
+        }
+        #expect(ZernioMockURLProtocol.count(method: "POST", suffix: "/posts") == 1)
+
+        try Data("video".utf8).write(to: file)
+        let manifestDirectory = root.appendingPathComponent(".zernio-batches")
+        let manifestName = try #require(FileManager.default.contentsOfDirectory(atPath: manifestDirectory.path).first)
+        try Data("not-json".utf8).write(to: manifestDirectory.appendingPathComponent(manifestName))
+        await #expect(throws: Clip4XError.self) {
+            _ = try await scheduler.execute(schedule, credentials: credentials)
+        }
+        #expect(ZernioMockURLProtocol.count(method: "POST", suffix: "/posts") == 1)
     }
 }
 
