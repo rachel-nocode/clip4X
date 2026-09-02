@@ -16,6 +16,7 @@ public struct WhisperTranscriber: Sendable {
             audioURL.path,
             "--model", model,
             "--language", "en",
+            "--word_timestamps", "True",
             "--output_format", "json",
             "--output_dir", outputDirectory.path,
             "--verbose", "False"
@@ -34,7 +35,18 @@ public struct WhisperTranscriber: Sendable {
         let data = try Data(contentsOf: jsonURL)
         let decoded = try JSONDecoder().decode(WhisperOutput.self, from: data)
         let segments = decoded.segments
-            .map { TranscriptSegment(start: $0.start, end: $0.end, text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .map {
+                TranscriptSegment(
+                    start: $0.start,
+                    end: $0.end,
+                    text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                    words: ($0.words ?? []).compactMap { word in
+                        guard let start = word.start, let end = word.end, end > start else { return nil }
+                        let text = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return text.isEmpty ? nil : TranscriptWord(word: text, start: start, end: end)
+                    }
+                )
+            }
             .filter { !$0.text.isEmpty && $0.end > $0.start }
 
         guard !segments.isEmpty else {
@@ -53,4 +65,11 @@ private struct WhisperSegment: Decodable {
     var start: Double
     var end: Double
     var text: String
+    var words: [WhisperWord]?
+}
+
+private struct WhisperWord: Decodable {
+    var word: String
+    var start: Double?
+    var end: Double?
 }

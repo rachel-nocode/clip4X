@@ -128,17 +128,44 @@ public struct VideoSize: Hashable, Sendable {
     }
 }
 
+public struct TranscriptWord: Codable, Hashable, Sendable {
+    public var word: String
+    public var start: Double
+    public var end: Double
+
+    public init(word: String, start: Double, end: Double) {
+        self.word = word
+        self.start = start
+        self.end = end
+    }
+}
+
 public struct TranscriptSegment: Identifiable, Codable, Hashable, Sendable {
     public var id: UUID
     public var start: Double
     public var end: Double
     public var text: String
+    public var words: [TranscriptWord]
 
-    public init(id: UUID = UUID(), start: Double, end: Double, text: String) {
+    public init(id: UUID = UUID(), start: Double, end: Double, text: String, words: [TranscriptWord] = []) {
         self.id = id
         self.start = start
         self.end = end
         self.text = text
+        self.words = words
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, start, end, text, words
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        start = try container.decode(Double.self, forKey: .start)
+        end = try container.decode(Double.self, forKey: .end)
+        text = try container.decode(String.self, forKey: .text)
+        words = try container.decodeIfPresent([TranscriptWord].self, forKey: .words) ?? []
     }
 }
 

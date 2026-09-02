@@ -20,6 +20,15 @@ struct Clip4XCLI {
             return
         }
 
+        if invocation.verb == .workflow {
+            try await runWorkflow(invocation)
+            return
+        }
+        if invocation.verb == .schedule {
+            try await runSchedule(invocation)
+            return
+        }
+
         guard let videoPath = invocation.videoPath else {
             throw Clip4XError.invalidMedia("Pass a video path.")
         }
@@ -28,7 +37,10 @@ struct Clip4XCLI {
             throw Clip4XError.invalidMedia("Cannot read \(videoURL.path).")
         }
 
-        let pipeline = try await ClipPipeline.make(requireWhisper: invocation.requiresWhisper)
+        let pipeline = try await ClipPipeline.make(
+            requireWhisper: invocation.requiresWhisper,
+            rankerPreference: invocation.rankerPreference
+        )
         let workDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("clip4x-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
 
@@ -48,6 +60,109 @@ struct Clip4XCLI {
             try await export(pipeline: pipeline, videoURL: videoURL, workDirectory: workDirectory, invocation: invocation)
         case .run:
             try await export(pipeline: pipeline, videoURL: videoURL, workDirectory: workDirectory, invocation: invocation)
+        case .workflow, .schedule:
+            break
+        }
+    }
+
+    private static func runWorkflow(_ invocation: ClipInvocation) async throws {
+        guard let input = invocation.videoPath else {
+            throw Clip4XError.invalidMedia("Pass a local video or YouTube URL.")
+        }
+        let projectRoot: URL
+        if let path = invocation.projectPath {
+            projectRoot = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        } else {
+            projectRoot = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Movies")
+                .appendingPathComponent("Clip4X")
+                .appendingPathComponent(WorkflowRunner.defaultProjectName(for: input))
+        }
+        let project = try WorkflowProject.create(root: projectRoot)
+        let result = try await WorkflowRunner().run(
+            input: input,
+            project: project,
+            options: WorkflowOptions(
+                layout: invocation.layout,
+                maxClips: invocation.maxClips,
+                captions: invocation.captions,
+                rankerPreference: invocation.rankerPreference
+            )
+        ) { message in
+            if !invocation.json {
+                FileHandle.standardError.write(Data("\(message)\n".utf8))
+            }
+        }
+        if invocation.json {
+            print(jsonObject([
+                "project": result.project.root.path,
+                "ranker": result.analysis.rankerName ?? "heuristic",
+                "renders": result.renders.map { $0.url.path }
+            ]))
+        } else {
+            print("project \(result.project.root.path)")
+            for render in result.renders {
+                print(render.url.path)
+            }
+        }
+    }
+
+    private static func runSchedule(_ invocation: ClipInvocation) async throws {
+        guard let folderPath = invocation.videoPath,
+              let startDate = invocation.startDate,
+              let clockTime = invocation.clockTime else {
+            throw Clip4XError.invalidMedia("Schedule requires RENDERS, --start-date, and --time.")
+        }
+        let folder = URL(fileURLWithPath: (folderPath as NSString).expandingTildeInPath)
+        let scheduler = ZernioScheduler()
+        let schedule = try await scheduler.plan(
+            directory: folder,
+            pattern: invocation.glob,
+            startDate: startDate,
+            time: clockTime,
+            timezone: invocation.timezone
+        )
+
+        if invocation.json, !invocation.execute {
+            print(jsonObject([
+                "execute": false,
+                "timezone": schedule.timezone,
+                "platforms": schedule.platforms.map(\.rawValue),
+                "items": schedule.items.map {
+                    ["file": $0.source.fileURL.path, "title": $0.source.metadata.title, "scheduledFor": $0.localDateTime]
+                }
+            ]))
+            return
+        }
+
+        if !invocation.json {
+            print("preview \(schedule.items.count) videos → YouTube Shorts + TikTok")
+            print("timezone \(schedule.timezone)")
+            for (index, item) in schedule.items.enumerated() {
+                print(String(format: "%02d. %@ | %@ | %@", index + 1, item.localDateTime, item.source.fileURL.lastPathComponent, item.source.metadata.title))
+            }
+        }
+        guard invocation.execute else {
+            if !invocation.json { print("DRY RUN ONLY — nothing uploaded or scheduled") }
+            return
+        }
+
+        let envFile = invocation.envFilePath.map {
+            URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+        }
+        let credentials = try ZernioCredentials.load(envFile: envFile)
+        let verified = try await scheduler.execute(schedule, credentials: credentials)
+        if invocation.json {
+            print(jsonObject([
+                "verified": verified.map {
+                    ["file": $0.fileURL.path, "postId": $0.postID]
+                }
+            ]))
+        } else {
+            print("VERIFIED SCHEDULE")
+            for post in verified {
+                print("\(post.fileURL.lastPathComponent) | post \(post.postID)")
+            }
         }
     }
 
@@ -216,7 +331,8 @@ struct Clip4XCLI {
     }
 
     private static func printAnalysis(_ result: AnalysisResult) {
-        print("duration \(DurationFormatter.short(result.duration))  \(result.sourceSize.width)x\(result.sourceSize.height)  clips \(result.clips.count)\(result.usedCodex ? "  (codex)" : "")")
+        let ranker = result.rankerName.map { "  (\($0.lowercased()))" } ?? ""
+        print("duration \(DurationFormatter.short(result.duration))  \(result.sourceSize.width)x\(result.sourceSize.height)  clips \(result.clips.count)\(ranker)")
         for (index, clip) in result.clips.enumerated() {
             print(String(
                 format: "[%d] %5.1f–%5.1f  %3d  %@",
@@ -259,6 +375,7 @@ struct Clip4XCLI {
             object["duration"] = result.duration
             object["size"] = ["width": result.sourceSize.width, "height": result.sourceSize.height]
             object["usedCodex"] = result.usedCodex
+            object["ranker"] = result.rankerName ?? "heuristic"
             object["clips"] = result.clips.enumerated().map { index, clip in
                 [
                     "index": index,

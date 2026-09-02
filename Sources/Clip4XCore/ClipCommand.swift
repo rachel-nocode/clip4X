@@ -5,6 +5,8 @@ public enum ClipVerb: String, CaseIterable, Sendable {
     case export
     case run
     case frame
+    case workflow
+    case schedule
     case help
 }
 
@@ -25,6 +27,14 @@ public struct ClipInvocation: Equatable, Sendable {
     public var at: Double?
     public var clipIndex: Int?
     public var captions: Bool
+    public var projectPath: String?
+    public var rankerPreference: MomentRankerPreference
+    public var startDate: String?
+    public var clockTime: String?
+    public var timezone: String
+    public var execute: Bool
+    public var glob: String
+    public var envFilePath: String?
 
     public init(
         verb: ClipVerb,
@@ -42,7 +52,15 @@ public struct ClipInvocation: Equatable, Sendable {
         maxClips: Int = 8,
         at: Double? = nil,
         clipIndex: Int? = nil,
-        captions: Bool = true
+        captions: Bool = true,
+        projectPath: String? = nil,
+        rankerPreference: MomentRankerPreference = .auto,
+        startDate: String? = nil,
+        clockTime: String? = nil,
+        timezone: String = "America/Los_Angeles",
+        execute: Bool = false,
+        glob: String = "*.mp4",
+        envFilePath: String? = nil
     ) {
         self.verb = verb
         self.videoPath = videoPath
@@ -60,6 +78,14 @@ public struct ClipInvocation: Equatable, Sendable {
         self.at = at
         self.clipIndex = clipIndex
         self.captions = captions
+        self.projectPath = projectPath
+        self.rankerPreference = rankerPreference
+        self.startDate = startDate
+        self.clockTime = clockTime
+        self.timezone = timezone
+        self.execute = execute
+        self.glob = glob
+        self.envFilePath = envFilePath
     }
 
     public var hasManualWindow: Bool {
@@ -69,11 +95,11 @@ public struct ClipInvocation: Equatable, Sendable {
 
     public var requiresWhisper: Bool {
         switch verb {
-        case .analyze:
+        case .analyze, .workflow:
             true
         case .export, .run:
             !hasManualWindow
-        case .frame, .help:
+        case .frame, .schedule, .help:
             false
         }
     }
@@ -97,6 +123,8 @@ public struct ClipInvocation: Equatable, Sendable {
       clip4x analyze VIDEO [--json]      Find clip moments only
       clip4x export VIDEO [options]      Export (uses --start/--end or detect)
       clip4x frame VIDEO [--at SEC]      Write one composed PNG to tune crop
+      clip4x workflow INPUT [options]    Build source/analysis/previews/renders project
+      clip4x schedule RENDERS [options]  Preview or execute daily YouTube + TikTok schedule
       clip4x help
 
     Layouts:
@@ -130,6 +158,14 @@ public struct ClipInvocation: Equatable, Sendable {
       --at SEC                   Timestamp for `frame`
       --clip-index N             Export only this detected clip (0-based)
       --max-clips N
+      --project PATH
+      --ranker auto|codex|claude
+      --start-date YYYY-MM-DD    Required for `schedule`
+      --time HH:MM               Required for `schedule`
+      --timezone IANA            Default: America/Los_Angeles
+      --glob PATTERN             Default: *.mp4
+      --env-file PATH            Optional Zernio credential file
+      --execute                  Upload and schedule (default is dry run)
       --no-captions
       --json
     """
@@ -159,6 +195,8 @@ public enum ClipCommand {
                 invocation.json = true
             } else if token == "--no-captions" {
                 invocation.captions = false
+            } else if token == "--execute" {
+                invocation.execute = true
             } else if token.hasPrefix("--") {
                 let body = String(token.dropFirst(2))
                 let name: String
@@ -191,7 +229,7 @@ public enum ClipCommand {
         return invocation
     }
 
-    private static let valuelessFlags: Set<String> = ["--json", "--no-captions"]
+    private static let valuelessFlags: Set<String> = ["--json", "--no-captions", "--execute"]
 
     /// Help tokens in flag or verb position only — not option values like `--title help`.
     private static func isHelpRequest(_ arguments: [String]) -> Bool {
@@ -247,6 +285,23 @@ public enum ClipCommand {
             invocation.clipIndex = Int(try number(resolved, flag: name))
         case "max-clips":
             invocation.maxClips = max(1, Int(try number(resolved, flag: name)))
+        case "project":
+            invocation.projectPath = resolved
+        case "ranker":
+            guard let preference = MomentRankerPreference(rawValue: resolved.lowercased()) else {
+                throw Clip4XError.invalidMedia("Ranker must be auto, codex, or claude.")
+            }
+            invocation.rankerPreference = preference
+        case "start-date":
+            invocation.startDate = resolved
+        case "time":
+            invocation.clockTime = resolved
+        case "timezone":
+            invocation.timezone = resolved
+        case "glob":
+            invocation.glob = resolved
+        case "env-file":
+            invocation.envFilePath = resolved
         default:
             throw Clip4XError.invalidMedia("Unknown flag --\(name).")
         }

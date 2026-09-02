@@ -6,14 +6,14 @@
 
 **Local-first macOS clipper — app or terminal — that turns long videos into captioned Shorts.**
 
-Drop a video (or pass it to `clip4x`) → Whisper transcribes → Codex ranks the strongest
-moments → FFmpeg exports vertical `9:16` or square `1:1` clips.
+Drop a video (or pass it to `clip4x`) → Whisper transcribes → Codex or Claude ranks the
+strongest moments → FFmpeg exports vertical `9:16` or square `1:1` clips.
 
 **Talking-head + demo framing:** `stack` keeps your face in the lower ~66% and floats the
 window you are showing as a rounded card on top. Use `clip4x frame` to tune the crop
 before you encode.
 
-Runs entirely on your machine. No uploads, no cloud, no accounts.
+Clipping runs entirely on your machine. Uploading is optional through YouTube or Zernio.
 
 </div>
 
@@ -24,10 +24,10 @@ Runs entirely on your machine. No uploads, no cloud, no accounts.
 - **Drag-and-drop** any FFmpeg-readable video (MP4, MOV, …).
 - **Import your own YouTube video** — paste a URL after connecting your channel.
 - **Local transcription** with [`openai-whisper`](https://github.com/openai/whisper) — timestamped segments.
-- **Moment ranking** via the Codex CLI to surface cohesive, viral-friendly clips.
+- **Moment ranking** via the Codex CLI or Claude Code CLI to surface cohesive, viral-friendly clips.
 - **One-click or one-command export** to `9:16` (vertical) or `1:1` (square).
 - **Framing modes:** `auto`, `stack` (face + rounded demo window), `face`, `fit`.
-- **Terminal CLI** (`clip4x`) — analyze, preview a still, pin regions, export.
+- **Terminal CLI** (`clip4x`) — ingest, analyze, preview, render, QC, and schedule.
 - **Blurred-fill background**, sticky hook + caption overlays.
 - **Dark mode UI** built in SwiftUI.
 - **Post to YouTube Shorts** directly — connect your account via OAuth, upload now or schedule.
@@ -85,7 +85,7 @@ brew install ffmpeg openai-whisper yt-dlp
 | `ffprobe`  | Reading source media metadata                         |
 | `whisper`  | Local timestamped transcription                       |
 | `yt-dlp`   | Downloading your own YouTube videos for import        |
-| `codex`    | Ranking transcript segments into clip candidates      |
+| `codex` or `claude` | Ranking transcript segments into clip candidates |
 
 ## Precise talking-head + demo crop
 
@@ -129,6 +129,58 @@ swift run clip4x -- frame talk.mov --layout stack --out /tmp/preview.png
 ```
 
 A video path with no verb runs the full pipeline (`analyze` + `export`).
+
+### Full artifact workflow
+
+`workflow` follows the advanced clipping flow: local/YouTube ingest, word-timed
+Whisper transcription, Codex or Claude moment selection, face + screen analysis,
+unique 1080×1920 renders, three-point preview frames, metadata, and stream-level QC.
+
+```sh
+swift run clip4x -- workflow talk.mov \
+  --project ~/Movies/Clip4X/talk \
+  --layout stack \
+  --ranker auto
+
+swift run clip4x -- workflow https://youtu.be/VIDEO_ID \
+  --project ~/Movies/Clip4X/youtube-talk
+```
+
+Each project contains `source/`, `analysis/`, `previews/`, and `renders/`.
+Analysis writes `transcript.json`, `candidates.md`, `layouts.json`, and `qc.md`;
+renders writes uniquely versioned MP4s plus `metadata.json`.
+
+### Zernio daily Shorts
+
+Scheduling always previews first, targets YouTube + TikTok together, preserves the
+local clock across DST, uploads each asset once, and verifies every created post.
+Temporary Zernio media limits each batch to a seven-day publishing horizon.
+
+```sh
+export ZERNIO_API_KEY="..."
+export ZERNIO_YOUTUBE_ACCOUNT_ID="..."  # optional; resolved when omitted
+export ZERNIO_TIKTOK_ACCOUNT_ID="..."   # optional; resolved when omitted
+
+# Dry run: no network writes
+swift run clip4x -- schedule ~/Movies/Clip4X/talk/renders \
+  --start-date 2026-09-02 --time 08:00 \
+  --timezone America/Los_Angeles
+
+# Execute only after checking preview
+swift run clip4x -- schedule ~/Movies/Clip4X/talk/renders \
+  --start-date 2026-09-02 --time 08:00 \
+  --timezone America/Los_Angeles --execute
+```
+
+Use `--env-file /protected/path/zernio.env` instead of exported variables when
+preferred. Credentials, account IDs, and media URLs are never printed.
+
+### Install the release CLI
+
+```sh
+swift build -c release --product clip4x
+install .build/release/clip4x /usr/local/bin/clip4x
+```
 
 ## Run the app from source
 

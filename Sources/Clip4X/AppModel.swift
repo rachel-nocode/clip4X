@@ -11,6 +11,7 @@ final class AppModel: ObservableObject {
         .appendingPathComponent("Clip4X Exports")
     @Published var selectedRatio: ExportRatio = .vertical
     @Published var selectedLayout: ExportLayout = .auto
+    @Published var rankerPreference: MomentRankerPreference = .auto
     @Published var clips: [ClipCandidate] = []
     @Published var isWorking = false
     /// 0...1 progress for batch work (export/upload). `nil` = indeterminate.
@@ -88,7 +89,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard youtubeAuth.canImportOwnVideos else {
-            status = YouTubeImportError.reconnectRequired.localizedDescription ?? "Reconnect YouTube."
+            status = YouTubeImportError.reconnectRequired.localizedDescription
             youtubeAuth.markError("Reconnect YouTube — import needs an extra permission.")
             return
         }
@@ -130,15 +131,15 @@ final class AppModel: ObservableObject {
     private func runAnalysis() async throws {
         guard let sourceURL else { return }
 
-        let pipeline = try await ClipPipeline.make()
+        let pipeline = try await ClipPipeline.make(rankerPreference: rankerPreference)
         let workDirectory = try makeWorkDirectory()
         status = "Analyzing"
         appendLog("Checking local tools")
         let result = try await pipeline.analyze(videoURL: sourceURL, workDirectory: workDirectory)
         transcriptCount = result.segments.count
         clips = result.clips
-        if result.usedCodex {
-            appendLog("Codex-ranked clips: \(clips.count)")
+        if let rankerName = result.rankerName {
+            appendLog("\(rankerName)-ranked clips: \(clips.count)")
         } else {
             appendLog("Used local heuristic for clip ranking")
         }

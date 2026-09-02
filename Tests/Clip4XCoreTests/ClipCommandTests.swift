@@ -63,3 +63,39 @@ import Testing
     let exportWindow = try ClipCommand.parse(["export", "talk.mov", "--start", "1", "--end", "4"])
     #expect(!exportWindow.requiresWhisper)
 }
+
+@Test func parsesWorkflowAndScheduleOptions() throws {
+    let workflow = try ClipCommand.parse([
+        "workflow", "https://youtu.be/abcdefghijk",
+        "--project", "/tmp/job",
+        "--ranker", "claude"
+    ])
+    #expect(workflow.verb == .workflow)
+    #expect(workflow.videoPath == "https://youtu.be/abcdefghijk")
+    #expect(workflow.projectPath == "/tmp/job")
+    #expect(workflow.rankerPreference == .claude)
+
+    let schedule = try ClipCommand.parse([
+        "schedule", "/tmp/job/renders",
+        "--start-date", "2026-09-02",
+        "--time", "08:00",
+        "--timezone", "America/Los_Angeles",
+        "--glob", "*-v3.mp4",
+        "--env-file", "/tmp/zernio.env"
+    ])
+    #expect(schedule.verb == .schedule)
+    #expect(schedule.startDate == "2026-09-02")
+    #expect(schedule.clockTime == "08:00")
+    #expect(schedule.timezone == "America/Los_Angeles")
+    #expect(schedule.glob == "*-v3.mp4")
+    #expect(schedule.envFilePath == "/tmp/zernio.env")
+    #expect(!schedule.execute)
+
+    let execute = try ClipCommand.parse([
+        "schedule", "/tmp/job/renders",
+        "--start-date", "2026-09-02",
+        "--time", "08:00",
+        "--execute"
+    ])
+    #expect(execute.execute)
+}

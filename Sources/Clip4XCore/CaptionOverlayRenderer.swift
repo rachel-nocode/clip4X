@@ -1,6 +1,62 @@
 import AppKit
 import Foundation
 
+public struct CaptionCard: Hashable, Sendable {
+    public var start: Double
+    public var end: Double
+    public var text: String
+
+    public init(start: Double, end: Double, text: String) {
+        self.start = start
+        self.end = end
+        self.text = text
+    }
+}
+
+public enum CaptionTimeline {
+    public static func cards(
+        words: [TranscriptWord],
+        clipStart: Double,
+        clipEnd: Double,
+        maxWords: Int = 6,
+        maxCharacters: Int = 28
+    ) -> [CaptionCard] {
+        let selected = words
+            .filter { $0.end > clipStart && $0.start < clipEnd && !$0.word.isEmpty }
+            .sorted { $0.start < $1.start }
+        var groups: [[TranscriptWord]] = []
+        var current: [TranscriptWord] = []
+        for word in selected {
+            let candidate = (current.map(\.word) + [word.word]).joined(separator: " ")
+            if !current.isEmpty && (current.count >= maxWords || candidate.count > maxCharacters) {
+                groups.append(current)
+                current = []
+            }
+            current.append(word)
+            if current.count >= 3, word.word.last.map({ ".!?".contains($0) }) == true {
+                groups.append(current)
+                current = []
+            }
+        }
+        if !current.isEmpty { groups.append(current) }
+
+        var cards = groups.compactMap { group -> CaptionCard? in
+            guard let first = group.first, let last = group.last else { return nil }
+            let start = max(0, first.start - clipStart)
+            let end = min(clipEnd - clipStart, last.end - clipStart + 0.08)
+            guard end > start else { return nil }
+            return CaptionCard(start: start, end: end, text: group.map(\.word).joined(separator: " "))
+        }
+        for index in cards.indices.dropLast() {
+            cards[index].end = max(
+                cards[index].start + 0.08,
+                min(cards[index].end, cards[index + 1].start - 0.01)
+            )
+        }
+        return cards
+    }
+}
+
 public struct CaptionOverlayRenderer: Sendable {
     public init() {}
 
@@ -201,7 +257,15 @@ public struct CaptionOverlayRenderer: Sendable {
     }
 
     private func captionChunks(for clip: ClipCandidate) -> [(start: Double, end: Double, text: String)] {
-        clip.transcript.flatMap { segment -> [(start: Double, end: Double, text: String)] in
+        let wordCards = CaptionTimeline.cards(
+            words: clip.transcript.flatMap(\.words),
+            clipStart: clip.start,
+            clipEnd: clip.end
+        )
+        if !wordCards.isEmpty {
+            return wordCards.map { ($0.start, $0.end, $0.text) }
+        }
+        return clip.transcript.flatMap { segment -> [(start: Double, end: Double, text: String)] in
             let localStart = max(0, segment.start - clip.start)
             let localEnd = min(clip.duration, segment.end - clip.start)
             guard localEnd > localStart else { return [] }
