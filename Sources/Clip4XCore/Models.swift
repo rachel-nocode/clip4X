@@ -186,7 +186,7 @@ public struct TextLayout: Hashable, Sendable {
     public static let split = TextLayout(hookBand: .top, captionBand: .bottom)
 }
 
-public struct CropPlan: Hashable, Sendable {
+public struct CropPlan: Codable, Hashable, Sendable {
     public var x: Int
     public var y: Int
     public var width: Int

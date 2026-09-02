@@ -17,12 +17,26 @@ public struct WorkflowLayoutArtifact: Codable, Equatable, Sendable {
     public var sourceHeight: Int
     public var face: NormalizedRect?
     public var screen: NormalizedRect?
+    public var resolvedLayout: String
+    public var faceCrop: CropPlan?
+    public var screenCrop: CropPlan?
 
-    public init(sourceWidth: Int, sourceHeight: Int, face: NormalizedRect?, screen: NormalizedRect?) {
+    public init(
+        sourceWidth: Int,
+        sourceHeight: Int,
+        face: NormalizedRect?,
+        screen: NormalizedRect?,
+        resolvedLayout: String = "fit",
+        faceCrop: CropPlan? = nil,
+        screenCrop: CropPlan? = nil
+    ) {
         self.sourceWidth = sourceWidth
         self.sourceHeight = sourceHeight
         self.face = face
         self.screen = screen
+        self.resolvedLayout = resolvedLayout
+        self.faceCrop = faceCrop
+        self.screenCrop = screenCrop
     }
 }
 

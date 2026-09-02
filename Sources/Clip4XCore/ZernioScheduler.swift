@@ -226,6 +226,11 @@ public struct VerifiedZernioPost: Sendable {
     public var postID: String
 }
 
+struct ZernioAccountCandidate: Equatable, Sendable {
+    var id: String
+    var platform: String
+}
+
 public struct ZernioScheduler: Sendable {
     public var baseURL: URL
     public var session: URLSession
@@ -275,25 +280,44 @@ public struct ZernioScheduler: Sendable {
         _ schedule: ZernioSchedule,
         credentials initialCredentials: ZernioCredentials
     ) async throws -> [VerifiedZernioPost] {
-        var credentials = initialCredentials
+        let credentials = initialCredentials
+        var discovered: [ZernioAccountCandidate] = []
         if credentials.youtubeAccountID == nil || credentials.tiktokAccountID == nil {
             let accounts: AccountsResponse = try await request("GET", path: "accounts", apiKey: credentials.apiKey)
-            for account in accounts.accounts where account.isActive != false && account.status != "disconnected" && account.status != "deleted" {
-                if account.platform.lowercased() == "youtube", credentials.youtubeAccountID == nil { credentials.youtubeAccountID = account.id }
-                if account.platform.lowercased() == "tiktok", credentials.tiktokAccountID == nil { credentials.tiktokAccountID = account.id }
-            }
+            discovered = accounts.accounts
+                .filter { $0.isActive != false && $0.status != "disconnected" && $0.status != "deleted" }
+                .map { ZernioAccountCandidate(id: $0.id, platform: $0.platform) }
         }
-        guard let youtubeID = credentials.youtubeAccountID, let tiktokID = credentials.tiktokAccountID else {
-            throw Clip4XError.invalidMedia("Active YouTube and TikTok Zernio accounts are both required.")
-        }
+        let resolved = try Self.resolveAccountIDs(
+            accounts: discovered,
+            youtubeID: credentials.youtubeAccountID,
+            tiktokID: credentials.tiktokAccountID
+        )
+        let youtubeID = resolved.youtube
+        let tiktokID = resolved.tiktok
 
-        let manifestURL = manifestURL(for: schedule)
+        let manifestURL = try manifestURL(for: schedule)
         var manifest = (try? JSONDecoder().decode(BatchManifest.self, from: Data(contentsOf: manifestURL)))
             ?? BatchManifest(timezone: schedule.timezone, items: [:])
         var verified: [VerifiedZernioPost] = []
         for item in schedule.items {
             let name = item.source.fileURL.lastPathComponent
-            var record = manifest.items[name] ?? ManifestItem(requestID: UUID().uuidString, scheduledFor: item.localDateTime, postID: nil)
+            let fingerprint = try Self.itemFingerprint(
+                item: item,
+                timezone: schedule.timezone,
+                youtubeID: youtubeID,
+                tiktokID: tiktokID
+            )
+            var record = manifest.items[name]
+            if record?.fingerprint != fingerprint {
+                record = ManifestItem(
+                    requestID: UUID().uuidString,
+                    scheduledFor: item.localDateTime,
+                    fingerprint: fingerprint,
+                    postID: nil
+                )
+            }
+            guard var record else { throw Clip4XError.exportFailed("Could not create Zernio manifest record.") }
             manifest.items[name] = record
             try save(manifest, to: manifestURL)
 
@@ -394,7 +418,7 @@ public struct ZernioScheduler: Sendable {
         guard let post, post.status == "scheduled" else {
             throw Clip4XError.exportFailed("Zernio post read-back was not scheduled.")
         }
-        guard localDateTime(post.scheduledFor, timezone: timezone) == item.localDateTime else {
+        guard Self.remoteLocalDateTime(post.scheduledFor, timezone: timezone) == item.localDateTime else {
             throw Clip4XError.exportFailed("Zernio post read-back time did not match \(item.localDateTime).")
         }
         let platforms = Set(post.platforms.map { $0.platform.lowercased() })
@@ -403,11 +427,15 @@ public struct ZernioScheduler: Sendable {
         }
     }
 
-    private func localDateTime(_ raw: String?, timezone: String) -> String? {
+    static func remoteLocalDateTime(_ raw: String?, timezone: String) -> String? {
         guard let raw else { return nil }
         if raw.hasSuffix("Z") || raw.dropFirst(10).contains("+") || raw.dropFirst(10).contains("-") {
-            let iso = ISO8601DateFormatter()
-            guard let date = iso.date(from: raw), let zone = TimeZone(identifier: timezone) else { return nil }
+            let fractional = ISO8601DateFormatter()
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let standard = ISO8601DateFormatter()
+            standard.formatOptions = [.withInternetDateTime]
+            guard let date = fractional.date(from: raw) ?? standard.date(from: raw),
+                  let zone = TimeZone(identifier: timezone) else { return nil }
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.timeZone = zone
@@ -417,10 +445,55 @@ public struct ZernioScheduler: Sendable {
         return String(raw.prefix(19))
     }
 
-    private func manifestURL(for schedule: ZernioSchedule) -> URL {
+    static func resolveAccountIDs(
+        accounts: [ZernioAccountCandidate],
+        youtubeID: String?,
+        tiktokID: String?
+    ) throws -> (youtube: String, tiktok: String) {
+        func resolve(_ platform: String, explicit: String?) throws -> String {
+            if let explicit, !explicit.isEmpty { return explicit }
+            let candidates = accounts.filter { $0.platform.lowercased() == platform }
+            guard candidates.count == 1, let id = candidates.first?.id else {
+                if candidates.count > 1 {
+                    throw Clip4XError.invalidMedia(
+                        "Multiple active \(platform.capitalized) accounts found. Set ZERNIO_\(platform.uppercased())_ACCOUNT_ID."
+                    )
+                }
+                throw Clip4XError.invalidMedia(
+                    "One active \(platform.capitalized) account is required. Set ZERNIO_\(platform.uppercased())_ACCOUNT_ID."
+                )
+            }
+            return id
+        }
+        return (
+            youtube: try resolve("youtube", explicit: youtubeID),
+            tiktok: try resolve("tiktok", explicit: tiktokID)
+        )
+    }
+
+    static func itemFingerprint(
+        item: ZernioScheduleItem,
+        timezone: String,
+        youtubeID: String,
+        tiktokID: String
+    ) throws -> String {
+        var hasher = SHA256()
+        let handle = try FileHandle(forReadingFrom: item.source.fileURL)
+        defer { try? handle.close() }
+        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        hasher.update(data: try encoder.encode(item.source.metadata))
+        hasher.update(data: Data("\(item.localDateTime)|\(timezone)|\(youtubeID)|\(tiktokID)".utf8))
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func manifestURL(for schedule: ZernioSchedule) throws -> URL {
         let directory = schedule.items[0].source.fileURL.deletingLastPathComponent()
             .appendingPathComponent(".zernio-batches", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let source = "\(directory.path)|\(schedule.timezone)|\(schedule.items.map(\.localDateTime).joined(separator: ","))"
         let hash = SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16)
         return directory.appendingPathComponent("\(hash).json")
@@ -551,6 +624,7 @@ private struct BatchManifest: Codable {
 private struct ManifestItem: Codable {
     var requestID: String
     var scheduledFor: String
+    var fingerprint: String?
     var postID: String?
 }
 

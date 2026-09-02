@@ -29,6 +29,7 @@ public struct ClipPipeline: Sendable {
     public var whisperPath: String
     public var whisperModel: String
     public var rankerProvider: MomentRankerProvider?
+    public var rankerFallbackAllowed: Bool
     public var analyzer: FaceAndCropAnalyzer
 
     public init(
@@ -36,30 +37,38 @@ public struct ClipPipeline: Sendable {
         whisperPath: String,
         whisperModel: String = "base",
         rankerProvider: MomentRankerProvider? = nil,
+        rankerFallbackAllowed: Bool = true,
         analyzer: FaceAndCropAnalyzer = FaceAndCropAnalyzer()
     ) {
         self.mediaTools = mediaTools
         self.whisperPath = whisperPath
         self.whisperModel = whisperModel
         self.rankerProvider = rankerProvider
+        self.rankerFallbackAllowed = rankerFallbackAllowed
         self.analyzer = analyzer
     }
 
     public static func make(
         requireWhisper: Bool = true,
-        rankerPreference: MomentRankerPreference = .auto
+        rankerPreference: MomentRankerPreference = .auto,
+        findTool: @Sendable (String) async -> String? = { await ToolLocator.find($0) }
     ) async throws -> ClipPipeline {
-        guard let ffmpeg = await ToolLocator.find("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
-        guard let ffprobe = await ToolLocator.find("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
-        let whisper = await ToolLocator.find("whisper")
+        guard let ffmpeg = await findTool("ffmpeg") else { throw Clip4XError.missingTool("ffmpeg") }
+        guard let ffprobe = await findTool("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
+        let whisper = await findTool("whisper")
         if requireWhisper, whisper == nil {
             throw Clip4XError.missingTool("whisper")
+        }
+        let provider = await rankerPreference.resolve(findTool: findTool)
+        if let toolName = rankerPreference.toolName, provider == nil {
+            throw Clip4XError.missingTool(toolName)
         }
         return ClipPipeline(
             mediaTools: MediaTools(ffmpegPath: ffmpeg, ffprobePath: ffprobe),
             whisperPath: whisper ?? "",
             whisperModel: "base",
-            rankerProvider: await rankerPreference.resolve { await ToolLocator.find($0) }
+            rankerProvider: provider,
+            rankerFallbackAllowed: rankerPreference == .auto
         )
     }
 
@@ -83,36 +92,68 @@ public struct ClipPipeline: Sendable {
         let segments = try await transcriber.transcribe(audioURL: audioURL, outputDirectory: transcriptDirectory)
 
         onStatus?("Finding clip moments")
-        let detector = ClipMomentDetector(maxClips: maxClips)
-        let fallbackClips = detector.detect(in: segments, sourceDuration: duration)
+        let selection = try await rankSelection(
+            segments: segments,
+            sourceDuration: duration,
+            workDirectory: workDirectory,
+            maxClips: maxClips,
+            onStatus: onStatus
+        )
 
-        var rankerName: String?
-        let clips: [ClipCandidate]
+        return AnalysisResult(
+            duration: duration,
+            sourceSize: sourceSize,
+            segments: segments,
+            clips: selection.clips,
+            rankerName: selection.rankerName
+        )
+    }
+
+    public func rankCandidates(
+        segments: [TranscriptSegment],
+        sourceDuration: Double,
+        workDirectory: URL,
+        maxClips: Int = 8
+    ) async throws -> [ClipCandidate] {
+        try await rankSelection(
+            segments: segments,
+            sourceDuration: sourceDuration,
+            workDirectory: workDirectory,
+            maxClips: maxClips,
+            onStatus: nil
+        ).clips
+    }
+
+    private func rankSelection(
+        segments: [TranscriptSegment],
+        sourceDuration: Double,
+        workDirectory: URL,
+        maxClips: Int,
+        onStatus: (@Sendable (String) -> Void)?
+    ) async throws -> (clips: [ClipCandidate], rankerName: String?) {
+        let detector = ClipMomentDetector(maxClips: maxClips)
+        let fallbackClips = detector.detect(in: segments, sourceDuration: sourceDuration)
         if let rankerProvider {
             do {
                 onStatus?("Ranking moments with \(rankerProvider.name) CLI")
                 let ranker = LocalAIMomentRanker(provider: rankerProvider)
                 let ranked = try await ranker.rank(
                     segments: segments,
-                    sourceDuration: duration,
+                    sourceDuration: sourceDuration,
                     workDirectory: workDirectory.appendingPathComponent(rankerProvider.name.lowercased())
                 )
-                clips = ranked.isEmpty ? fallbackClips : Array(ranked.prefix(maxClips))
-                rankerName = ranked.isEmpty ? nil : rankerProvider.name
+                if ranked.isEmpty, !rankerFallbackAllowed {
+                    throw Clip4XError.exportFailed("\(rankerProvider.name) returned no clip candidates.")
+                }
+                return ranked.isEmpty
+                    ? (fallbackClips, nil)
+                    : (Array(ranked.prefix(maxClips)), rankerProvider.name)
             } catch {
-                clips = fallbackClips
+                if !rankerFallbackAllowed { throw error }
+                return (fallbackClips, nil)
             }
-        } else {
-            clips = fallbackClips
         }
-
-        return AnalysisResult(
-            duration: duration,
-            sourceSize: sourceSize,
-            segments: segments,
-            clips: clips,
-            rankerName: rankerName
-        )
+        return (fallbackClips, nil)
     }
 
     public func scenePlan(

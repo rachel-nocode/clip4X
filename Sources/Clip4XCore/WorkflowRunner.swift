@@ -64,9 +64,14 @@ public struct WorkflowResult: Sendable {
 
 public struct WorkflowRunner: Sendable {
     public var sourceResolver: WorkflowSourceResolver
+    public var pipeline: ClipPipeline?
 
-    public init(sourceResolver: WorkflowSourceResolver = WorkflowSourceResolver()) {
+    public init(
+        sourceResolver: WorkflowSourceResolver = WorkflowSourceResolver(),
+        pipeline: ClipPipeline? = nil
+    ) {
         self.sourceResolver = sourceResolver
+        self.pipeline = pipeline
     }
 
     public static func defaultProjectName(for input: String) -> String {
@@ -93,7 +98,11 @@ public struct WorkflowRunner: Sendable {
         let workDirectory = project.analysisDirectory.appendingPathComponent("work", isDirectory: true)
         try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
 
-        let pipeline = try await ClipPipeline.make(rankerPreference: options.rankerPreference)
+        let pipeline = if let pipeline {
+            pipeline
+        } else {
+            try await ClipPipeline.make(rankerPreference: options.rankerPreference)
+        }
         let analysis = try await pipeline.analyze(
             videoURL: sourceURL,
             workDirectory: workDirectory,
@@ -118,11 +127,27 @@ public struct WorkflowRunner: Sendable {
                 sourceSize: analysis.sourceSize,
                 options: exportOptions
             )
+            let resolved = scene.resolve(
+                layout: exportOptions.layout,
+                ratio: exportOptions.ratio,
+                style: exportOptions.style
+            )
+            let resolvedArtifact: (String, CropPlan?, CropPlan?) = switch resolved {
+            case .fit:
+                ("fit", nil, nil)
+            case .face(let crop):
+                ("face", crop, nil)
+            case .stack(let face, let demo, _):
+                ("stack", face, demo)
+            }
             layouts[outputURL.lastPathComponent] = WorkflowLayoutArtifact(
                 sourceWidth: analysis.sourceSize.width,
                 sourceHeight: analysis.sourceSize.height,
                 face: scene.face,
-                screen: scene.demo
+                screen: scene.demo,
+                resolvedLayout: resolvedArtifact.0,
+                faceCrop: resolvedArtifact.1,
+                screenCrop: resolvedArtifact.2
             )
             try await pipeline.exportClip(
                 videoURL: sourceURL,

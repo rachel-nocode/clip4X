@@ -20,18 +20,31 @@ public enum WorkflowInput: Equatable, Sendable {
 
 public struct WorkflowSourceResolver: Sendable {
     public var ytdlpPath: String?
+    public var ffprobePath: String?
+    public var validateMedia: Bool
 
-    public init(ytdlpPath: String? = nil) {
+    public init(
+        ytdlpPath: String? = nil,
+        ffprobePath: String? = nil,
+        validateMedia: Bool = true
+    ) {
         self.ytdlpPath = ytdlpPath
+        self.ffprobePath = ffprobePath
+        self.validateMedia = validateMedia
     }
 
     public func resolve(_ input: WorkflowInput, into project: WorkflowProject) async throws -> URL {
+        let resolved: URL
         switch input {
         case .file(let source):
-            return try copyLocal(source, into: project)
+            resolved = try copyLocal(source, into: project)
         case .youtube(let url):
-            return try await downloadYouTube(url, into: project)
+            resolved = try await downloadYouTube(url, into: project)
         }
+        if validateMedia {
+            try await validate(resolved)
+        }
+        return resolved
     }
 
     private func copyLocal(_ source: URL, into project: WorkflowProject) throws -> URL {
@@ -52,25 +65,58 @@ public struct WorkflowSourceResolver: Sendable {
         } else {
             throw Clip4XError.missingTool("yt-dlp")
         }
-        let template = project.sourceDirectory.appendingPathComponent("source.%(ext)s").path
-        _ = try await ProcessRunner.run(tool, [
+        let stem = try uniqueSourceStem(project: project)
+        let template = project.sourceDirectory.appendingPathComponent("\(stem).%(ext)s").path
+        let result = try await ProcessRunner.run(tool, [
             "--no-playlist",
             "--write-info-json",
             "-f", "bv*+ba/b",
             "--merge-output-format", "mp4",
+            "--print", "after_move:filepath",
             "-o", template,
             url.absoluteString
         ])
-        let files = try FileManager.default.contentsOfDirectory(
-            at: project.sourceDirectory,
-            includingPropertiesForKeys: [.isRegularFileKey]
-        )
-        guard let video = files.first(where: {
-            ["mp4", "mov", "mkv", "webm"].contains($0.pathExtension.lowercased())
-        }) else {
+        guard let output = result.stdout.split(whereSeparator: \.isNewline).last else {
             throw Clip4XError.invalidMedia("yt-dlp did not create a readable video.")
         }
+        let video = URL(fileURLWithPath: String(output)).standardizedFileURL
+        let sourceDirectory = project.sourceDirectory.standardizedFileURL.path + "/"
+        guard video.path.hasPrefix(sourceDirectory),
+              ["mp4", "mov", "mkv", "webm"].contains(video.pathExtension.lowercased()),
+              FileManager.default.isReadableFile(atPath: video.path) else {
+            throw Clip4XError.invalidMedia("yt-dlp returned an invalid output path.")
+        }
         return video
+    }
+
+    private func validate(_ video: URL) async throws {
+        guard FileManager.default.isReadableFile(atPath: video.path) else {
+            throw Clip4XError.invalidMedia("Cannot read \(video.path).")
+        }
+        let tool = if let ffprobePath {
+            ffprobePath
+        } else if let located = await ToolLocator.find("ffprobe") {
+            located
+        } else {
+            throw Clip4XError.missingTool("ffprobe")
+        }
+        let inspection = try await MediaTools(ffmpegPath: "ffmpeg", ffprobePath: tool)
+            .inspectMedia(videoURL: video)
+        guard inspection.audioCodec != nil else {
+            throw Clip4XError.invalidMedia("Source video has no audio stream.")
+        }
+    }
+
+    private func uniqueSourceStem(project: WorkflowProject) throws -> String {
+        let names = Set(try FileManager.default.contentsOfDirectory(atPath: project.sourceDirectory.path))
+        var version = 1
+        while true {
+            let stem = version == 1 ? "source" : "source-v\(version)"
+            if !names.contains(where: { $0 == stem || $0.hasPrefix("\(stem).") }) {
+                return stem
+            }
+            version += 1
+        }
     }
 
     private func uniqueSourceURL(project: WorkflowProject, extension ext: String) -> URL {

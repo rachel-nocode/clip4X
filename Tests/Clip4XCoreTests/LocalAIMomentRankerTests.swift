@@ -101,3 +101,38 @@ import Testing
     #expect(result.rankerName == "Claude")
     #expect(!result.usedCodex)
 }
+
+@Test func explicitMissingRankerFailsDuringPipelineCreation() async {
+    await #expect(throws: Clip4XError.self) {
+        _ = try await ClipPipeline.make(
+            requireWhisper: false,
+            rankerPreference: .claude
+        ) { name in
+            ["ffmpeg": "/bin/ffmpeg", "ffprobe": "/bin/ffprobe"][name]
+        }
+    }
+}
+
+@Test func explicitRankerFailureDoesNotSilentlyFallback() async throws {
+    let pipeline = ClipPipeline(
+        mediaTools: MediaTools(ffmpegPath: "/bin/ffmpeg", ffprobePath: "/bin/ffprobe"),
+        whisperPath: "/bin/whisper",
+        rankerProvider: .claude(path: "/usr/bin/false"),
+        rankerFallbackAllowed: false
+    )
+    let segments = [
+        TranscriptSegment(start: 0, end: 12, text: "Here is the specific result and why it matters to you."),
+        TranscriptSegment(start: 12, end: 28, text: "The practical payoff is a faster and clearer workflow.")
+    ]
+    let work = FileManager.default.temporaryDirectory
+        .appendingPathComponent("clip4x-explicit-ranker-test-\(UUID().uuidString)")
+
+    await #expect(throws: Clip4XError.self) {
+        _ = try await pipeline.rankCandidates(
+            segments: segments,
+            sourceDuration: 28,
+            workDirectory: work,
+            maxClips: 4
+        )
+    }
+}
