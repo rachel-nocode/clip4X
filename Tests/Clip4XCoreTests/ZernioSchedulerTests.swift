@@ -88,6 +88,17 @@ import Testing
         )
         #expect(error.errorDescription == "Zernio HTTP 400. Check account connections, privacy settings, and schedule details.")
         #expect(error.errorDescription?.contains("secret") == false)
+        #expect(error.existingPostID == nil)
+        #expect(ZernioRequestError(status: 409, body: Data(#"{"existingPostId":"post-1"}"#.utf8)).existingPostID == "post-1")
+    }
+
+    @Test func metadataLimitsSchedulingToCurrentRenderVersions() {
+        let files = ["01-hook.mp4", "01-hook-v2.mp4", "02-demo.mp4"].map { URL(fileURLWithPath: "/tmp/\($0)") }
+        let metadata = [
+            "01-hook-v2.mp4": WorkflowClipMetadata(title: "Hook", description: "", tags: []),
+            "02-demo.mp4": WorkflowClipMetadata(title: "Demo", description: "", tags: [])
+        ]
+        #expect(ZernioScheduler.filesForCurrentBatch(files, metadata: metadata).map(\.lastPathComponent) == ["01-hook-v2.mp4", "02-demo.mp4"])
     }
 
     @Test func accountDiscoveryRejectsAmbiguousPlatforms() {

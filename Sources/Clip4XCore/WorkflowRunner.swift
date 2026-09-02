@@ -163,7 +163,7 @@ public struct WorkflowRunner: Sendable {
                 mediaTools: pipeline.mediaTools,
                 videoURL: outputURL,
                 duration: inspection.duration,
-                prefix: stem,
+                prefix: outputURL.deletingPathExtension().lastPathComponent,
                 directory: project.previewsDirectory
             )
             metadata[outputURL.lastPathComponent] = WorkflowClipMetadata(

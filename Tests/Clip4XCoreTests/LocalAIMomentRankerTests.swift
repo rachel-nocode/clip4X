@@ -83,6 +83,17 @@ import Testing
     #expect(clips[0].isSelected)
 }
 
+@Test func claudeStructuredOutputDecodesToClips() throws {
+    let stdout = #"{"type":"result","subtype":"success","structured_output":{"clips":[{"title":"Structured hook","theme":"workflow","reason":"clear result","start":4,"end":18,"score":91}]}}"#
+    let clips = try LocalAIMomentRanker.decodeCandidates(
+        from: Data(stdout.utf8),
+        providerName: "Claude",
+        segments: [TranscriptSegment(start: 4, end: 18, text: "Here is the complete workflow and result.")],
+        sourceDuration: 20
+    )
+    #expect(clips.map(\.title) == ["Structured hook"])
+}
+
 @Test func pipelineCarriesSelectedRankerAndReportsItsName() {
     let pipeline = ClipPipeline(
         mediaTools: MediaTools(ffmpegPath: "/bin/ffmpeg", ffprobePath: "/bin/ffprobe"),

@@ -161,8 +161,13 @@ public struct LocalAIMomentRanker: Sendable {
         }
 
         let claudeResponse = try decoder.decode(ClaudePrintResponse.self, from: data)
-        let resultData = Data(claudeResponse.result.utf8)
-        return try decoder.decode(AIMomentResponse.self, from: resultData)
+        if let structuredOutput = claudeResponse.structuredOutput {
+            return structuredOutput
+        }
+        guard let result = claudeResponse.result else {
+            throw Clip4XError.exportFailed("Claude returned no structured clip output.")
+        }
+        return try decoder.decode(AIMomentResponse.self, from: Data(result.utf8))
     }
 
     private static func makePrompt(segments: [TranscriptSegment], sourceDuration: Double) -> String {
@@ -305,5 +310,11 @@ private struct AIMoment: Decodable {
 }
 
 private struct ClaudePrintResponse: Decodable {
-    var result: String
+    var result: String?
+    var structuredOutput: AIMomentResponse?
+
+    enum CodingKeys: String, CodingKey {
+        case result
+        case structuredOutput = "structured_output"
+    }
 }

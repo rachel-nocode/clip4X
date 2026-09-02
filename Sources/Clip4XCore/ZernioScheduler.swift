@@ -249,14 +249,15 @@ public struct ZernioScheduler: Sendable {
         now: Date = .now
     ) async throws -> ZernioSchedule {
         guard let ffprobe = await ToolLocator.find("ffprobe") else { throw Clip4XError.missingTool("ffprobe") }
-        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
-            .filter { matches($0.lastPathComponent, pattern: pattern) && ["mp4", "mov", "webm"].contains($0.pathExtension.lowercased()) }
         let metadataURL = directory.appendingPathComponent("metadata.json")
         let metadata: [String: WorkflowClipMetadata] = if FileManager.default.fileExists(atPath: metadataURL.path) {
             try JSONDecoder().decode([String: WorkflowClipMetadata].self, from: Data(contentsOf: metadataURL))
         } else {
             [:]
         }
+        let matchingFiles = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
+            .filter { matches($0.lastPathComponent, pattern: pattern) && ["mp4", "mov", "webm"].contains($0.pathExtension.lowercased()) }
+        let files = Self.filesForCurrentBatch(matchingFiles, metadata: metadata)
         let tools = MediaTools(ffmpegPath: "ffmpeg", ffprobePath: ffprobe)
         var clips: [ZernioSourceClip] = []
         for file in ZernioSchedule.naturalSort(files) {
@@ -352,7 +353,7 @@ public struct ZernioScheduler: Sendable {
                     }
                     postID = id
                 } catch let error as ZernioRequestError {
-                    guard let id = error.existingPostID else { throw error }
+                    guard error.status == 409, let id = error.existingPostID else { throw error }
                     postID = id
                 }
                 record.postID = postID
@@ -488,6 +489,14 @@ public struct ZernioScheduler: Sendable {
         hasher.update(data: try encoder.encode(item.source.metadata))
         hasher.update(data: Data("\(item.localDateTime)|\(timezone)|\(youtubeID)|\(tiktokID)".utf8))
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func filesForCurrentBatch(
+        _ files: [URL],
+        metadata: [String: WorkflowClipMetadata]
+    ) -> [URL] {
+        guard !metadata.isEmpty else { return files }
+        return files.filter { metadata[$0.lastPathComponent] != nil }
     }
 
     private func manifestURL(for schedule: ZernioSchedule) throws -> URL {
@@ -633,7 +642,12 @@ struct ZernioRequestError: LocalizedError {
     var body: Data
 
     var existingPostID: String? {
-        (try? JSONDecoder().decode(PostEnvelope.self, from: body))?.resolvedID
+        guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return nil }
+        if let id = object["existingPostId"] as? String { return id }
+        if let post = object["existingPost"] as? [String: Any] {
+            return post["id"] as? String ?? post["_id"] as? String
+        }
+        return nil
     }
 
     var errorDescription: String? {
