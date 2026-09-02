@@ -25,24 +25,24 @@ public enum YouTubeImportError: LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .invalidURL:
-            "Paste a YouTube video URL or video ID."
+            return "Paste a YouTube video URL or video ID."
         case .reconnectRequired:
-            "Reconnect YouTube to import your own videos."
+            return "Reconnect YouTube to import your own videos."
         case .notOwned:
-            "That video is not on your connected YouTube channel."
+            return "That video is not on your connected YouTube channel."
         case .videoNotFound:
-            "YouTube could not find that video."
+            return "YouTube could not find that video."
         case .noChannel:
-            "No YouTube channel on this account."
+            return "No YouTube channel on this account."
         case let .apiError(code, body):
-            "YouTube API failed (HTTP \(code)): \(body)"
+            return "YouTube API failed (HTTP \(code)): \(body)"
         case let .downloadFailed(detail):
             let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty
                 ? "Download failed."
                 : "Download failed: \(trimmed.prefix(200))"
         case .privateDownloadFailed:
-            "This video is private. Download it from YouTube Studio and drop the file."
+            return "This video is private. Download it from YouTube Studio and drop the file."
         }
     }
 }

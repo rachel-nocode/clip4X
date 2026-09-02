@@ -87,6 +87,11 @@ import Testing
         }
     }
 
+    @Test func importErrorsExposeReadableDescriptions() {
+        #expect(YouTubeImportError.invalidURL.errorDescription == "Paste a YouTube video URL or video ID.")
+        #expect(YouTubeImportError.privateDownloadFailed.errorDescription?.contains("private") == true)
+    }
+
     @Test func configScopesIncludeReadonly() {
         #expect(YouTubeConfig.scopes.contains(YouTubeConfig.scope))
         #expect(YouTubeConfig.scopes.contains(YouTubeConfig.readonlyScope))

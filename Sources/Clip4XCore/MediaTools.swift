@@ -1,5 +1,21 @@
 import Foundation
 
+public struct MediaInspection: Equatable, Sendable {
+    public var width: Int
+    public var height: Int
+    public var duration: Double
+    public var videoCodec: String?
+    public var audioCodec: String?
+
+    public init(width: Int, height: Int, duration: Double, videoCodec: String?, audioCodec: String?) {
+        self.width = width
+        self.height = height
+        self.duration = duration
+        self.videoCodec = videoCodec
+        self.audioCodec = audioCodec
+    }
+}
+
 public struct MediaTools: Sendable {
     public var ffmpegPath: String
     public var ffprobePath: String
@@ -36,6 +52,29 @@ public struct MediaTools: Sendable {
             throw Clip4XError.invalidMedia("Could not read video dimensions.")
         }
         return VideoSize(width: width, height: height)
+    }
+
+    public func inspectMedia(videoURL: URL) async throws -> MediaInspection {
+        let result = try await ProcessRunner.run(ffprobePath, [
+            "-v", "error",
+            "-show_entries", "stream=codec_name,codec_type,width,height:format=duration",
+            "-of", "json",
+            videoURL.path
+        ])
+        let decoded = try JSONDecoder().decode(ProbeOutput.self, from: Data(result.stdout.utf8))
+        guard let video = decoded.streams.first(where: { $0.codecType == "video" }),
+              let width = video.width, let height = video.height,
+              let duration = Double(decoded.format.duration), duration > 0 else {
+            throw Clip4XError.invalidMedia("Could not inspect media streams.")
+        }
+        let audio = decoded.streams.first(where: { $0.codecType == "audio" })
+        return MediaInspection(
+            width: width,
+            height: height,
+            duration: duration,
+            videoCodec: video.codecName,
+            audioCodec: audio?.codecName
+        )
     }
 
     public func extractAudio(videoURL: URL, destinationURL: URL) async throws {
@@ -87,6 +126,17 @@ public struct MediaTools: Sendable {
             layout: layout,
             singleFrame: true
         )
+    }
+
+    public func extractFrame(videoURL: URL, at seconds: Double, destinationURL: URL) async throws {
+        _ = try await ProcessRunner.run(ffmpegPath, [
+            "-y",
+            "-ss", String(format: "%.3f", max(0, seconds)),
+            "-i", videoURL.path,
+            "-frames:v", "1",
+            "-update", "1",
+            destinationURL.path
+        ])
     }
 
     private func runComposition(
@@ -146,4 +196,26 @@ public struct MediaTools: Sendable {
 
         _ = try await ProcessRunner.run(ffmpegPath, arguments)
     }
+}
+
+private struct ProbeOutput: Decodable {
+    var streams: [ProbeStream]
+    var format: ProbeFormat
+}
+
+private struct ProbeStream: Decodable {
+    var codecName: String?
+    var codecType: String
+    var width: Int?
+    var height: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case codecName = "codec_name"
+        case codecType = "codec_type"
+        case width, height
+    }
+}
+
+private struct ProbeFormat: Decodable {
+    var duration: String
 }

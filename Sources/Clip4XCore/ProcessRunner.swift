@@ -7,8 +7,24 @@ public struct ProcessResult: Sendable {
 }
 
 public enum ToolLocator {
+    public static var defaultSearchDirectories: [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return [
+            "\(home)/.local/bin",
+            "\(home)/bin",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin"
+        ]
+    }
+
+    public static var defaultSearchPath: String {
+        defaultSearchDirectories.joined(separator: ":")
+    }
+
     public static func find(_ name: String) async -> String? {
-        for directory in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+        for directory in defaultSearchDirectories {
             let path = "\(directory)/\(name)"
             if FileManager.default.isExecutableFile(atPath: path) {
                 return path
@@ -17,7 +33,7 @@ public enum ToolLocator {
 
         do {
             let result = try await ProcessRunner.run("/usr/bin/which", [name], environment: [
-                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+                "PATH": defaultSearchPath
             ])
             let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             return path.isEmpty ? nil : path
@@ -49,7 +65,7 @@ public enum ProcessRunner {
             // it is not on PATH. Always guarantee the common tool directories are on
             // PATH so child processes can locate their own dependencies.
             var resolvedEnvironment = ProcessInfo.processInfo.environment
-            let toolDirectories = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+            let toolDirectories = ToolLocator.defaultSearchDirectories
             let existingPath = resolvedEnvironment["PATH"] ?? ""
             let existingEntries = existingPath.split(separator: ":").map(String.init)
             let mergedEntries = toolDirectories + existingEntries.filter { !toolDirectories.contains($0) }

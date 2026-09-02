@@ -21,7 +21,7 @@ struct ContentView: View {
 
                 HStack(spacing: 0) {
                     workflowPanel
-                        .frame(width: 360)
+                        .frame(width: 384)
 
                     Rectangle()
                         .fill(MDColor.outline)
@@ -60,7 +60,7 @@ struct ContentView: View {
             )
         }
         .padding(.horizontal, 24)
-        .frame(height: 72)
+        .frame(height: 64)
         .background(MDColor.surface)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -71,18 +71,22 @@ struct ContentView: View {
 
     private var workflowPanel: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 12) {
                 dropZone
                 youtubeImportField
                 formatSection
                 layoutSection
+                rankerSection
                 actionSection
                 YouTubeSection(auth: model.youtubeAuth)
                     .environmentObject(model)
-                statusPanel
+                if model.isWorking || model.transcriptCount > 0 || !model.log.isEmpty {
+                    statusPanel
+                }
             }
-            .padding(24)
+            .padding(16)
         }
+        .scrollIndicators(.hidden)
         .background(MDColor.canvas)
     }
 
@@ -90,14 +94,14 @@ struct ContentView: View {
         Button {
             model.chooseVideo()
         } label: {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     ZStack {
                         Circle()
                             .fill(MDColor.primaryContainer)
-                            .frame(width: 52, height: 52)
+                            .frame(width: 42, height: 42)
                         Image(systemName: model.sourceURL == nil ? "arrow.down.doc.fill" : "film.stack.fill")
-                            .font(.system(size: 22, weight: .bold))
+                            .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(MDColor.primary)
                     }
 
@@ -110,7 +114,7 @@ struct ContentView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(model.sourceURL?.lastPathComponent ?? "Drop a video")
-                        .font(.system(size: 19, weight: .bold))
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(MDColor.onSurface)
                         .lineLimit(2)
 
@@ -120,8 +124,8 @@ struct ContentView: View {
                         .lineLimit(3)
                 }
             }
-            .padding(18)
-            .frame(maxWidth: .infinity, minHeight: 196, alignment: .leading)
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 140, alignment: .leading)
             .background(MDColor.surface)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
@@ -234,6 +238,43 @@ struct ContentView: View {
         }
     }
 
+    private var rankerSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel("Ranker")
+
+            HStack(spacing: 8) {
+                ForEach(MomentRankerPreference.allCases) { preference in
+                    Button {
+                        model.rankerPreference = preference
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: rankerIcon(for: preference))
+                                .font(.system(size: 13, weight: .semibold))
+                            Text(preference.label)
+                                .font(.system(size: 13, weight: .semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(ChipButtonStyle(selected: model.rankerPreference == preference, height: 36, horizontalPadding: 8))
+                    .disabled(model.isWorking)
+                }
+            }
+        }
+    }
+
+    private func rankerIcon(for preference: MomentRankerPreference) -> String {
+        switch preference {
+        case .auto:
+            "arrow.triangle.branch"
+        case .codex:
+            "sparkles"
+        case .claude:
+            "text.bubble"
+        }
+    }
+
     private var actionSection: some View {
         VStack(spacing: 10) {
             Button {
@@ -338,11 +379,12 @@ struct ContentView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Clip candidates")
-                    .font(.system(size: 28, weight: .bold))
+                    .font(.system(size: 26, weight: .bold))
                     .foregroundStyle(MDColor.onSurface)
-                Text("Whisper transcribes. Codex ranks. FFmpeg exports blurred-background clips with captions.")
+                Text("Whisper transcribes. Codex or Claude ranks. FFmpeg exports blurred-background clips with captions.")
                     .font(.system(size: 13))
                     .foregroundStyle(MDColor.muted)
+                    .lineLimit(2)
             }
 
             Spacer()
@@ -351,7 +393,7 @@ struct ContentView: View {
             MetadataPill(icon: "checkmark.circle", text: "\(model.clips.filter(\.isSelected).count) selected")
         }
         .padding(.horizontal, 24)
-        .padding(.vertical, 20)
+        .padding(.vertical, 18)
         .background(MDColor.surface)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -574,7 +616,7 @@ private struct FilledButtonStyle: ButtonStyle {
             .font(.system(size: 14, weight: .bold))
             .foregroundStyle(isEnabled ? MDColor.onPrimary : MDColor.muted)
             .padding(.horizontal, 16)
-            .frame(height: 44)
+            .frame(height: 40)
             .background(isEnabled ? (configuration.isPressed ? MDColor.primaryHover : MDColor.primary) : MDColor.outlineStrong)
             .clipShape(Capsule())
     }
@@ -588,7 +630,7 @@ private struct TonalButtonStyle: ButtonStyle {
             .font(.system(size: 14, weight: .bold))
             .foregroundStyle(isEnabled ? MDColor.primary : MDColor.muted)
             .padding(.horizontal, 16)
-            .frame(height: 44)
+            .frame(height: 40)
             .background(isEnabled ? MDColor.primaryContainer.opacity(configuration.isPressed ? 0.72 : 1) : MDColor.surfaceMuted)
             .clipShape(Capsule())
     }
@@ -603,7 +645,7 @@ private struct OutlineButtonStyle: ButtonStyle {
             .font(.system(size: compact ? 12 : 14, weight: .bold))
             .foregroundStyle(isEnabled ? MDColor.primary : MDColor.muted)
             .padding(.horizontal, compact ? 10 : 16)
-            .frame(height: compact ? 32 : 42)
+            .frame(height: compact ? 30 : 40)
             .background(MDColor.surface.opacity(configuration.isPressed ? 0.72 : 1))
             .clipShape(Capsule())
             .overlay(
@@ -615,12 +657,14 @@ private struct OutlineButtonStyle: ButtonStyle {
 
 private struct ChipButtonStyle: ButtonStyle {
     var selected: Bool
+    var height: CGFloat = 38
+    var horizontalPadding: CGFloat = 12
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(selected ? MDColor.primary : MDColor.onSurface)
-            .padding(.horizontal, 12)
-            .frame(height: 38)
+            .padding(.horizontal, horizontalPadding)
+            .frame(height: height)
             .background(selected ? MDColor.primaryContainer : MDColor.surface)
             .clipShape(Capsule())
             .overlay(
